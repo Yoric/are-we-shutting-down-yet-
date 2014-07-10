@@ -12,6 +12,7 @@ body {
 .crash {
     margin-top: 50px;
     border-bottom: inset 1px;
+    height: 350px;
 }
 
 .signature {
@@ -37,4 +38,21 @@ body {
 
 .statistics {
     float:left;
+}
+
+.links li {
+    list-style-type: none;
+}
+
+.links li li {
+    list-style-type: none;
+}
+
+.links a {
+    transition: background-color 1s;
+}
+
+.links a:hover {
+    background-color:lightgray;
+    transition: background-color 1s;
 }

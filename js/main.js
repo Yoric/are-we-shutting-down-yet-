@@ -109,7 +109,7 @@
       eSingleDay.textContent = age + " days ago ";
       eLinks.appendChild(eSingleDay);
 
-      var eDayLinks = document.createElement("ol");
+      var eDayLinks = document.createElement("ul");
       eSingleDay.appendChild(eDayLinks);
 
       for (var sample of thatDay.all) {
@@ -282,6 +282,7 @@
     var sorted = [...versions.keys()].sort();
 
     var eResults = $("Results");
+    eResults.textContent = "The following versions have AsyncShutdownTimeout crashes";
     var eColors = document.createElement("ul");
     eResults.appendChild(eColors);
 
