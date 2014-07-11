@@ -410,9 +410,11 @@
       eCrash.appendChild(eHeader);
 
       // Show signature and number of hits
-      var eSignature = document.createElement("span");
+      var eSignature = document.createElement("a");
       eSignature.classList.add("signature");
       eSignature.textContent = crash.name;
+      eSignature.name = crash.name;
+      eSignature.href = "#" + crash.name;
       eHeader.appendChild(eSignature);
 
       var eHits = document.createElement("span");

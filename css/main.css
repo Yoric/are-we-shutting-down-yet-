@@ -48,11 +48,13 @@ body {
     list-style-type: none;
 }
 
-.links a {
+a {
     transition: background-color 1s;
+    text-decoration: none;
 }
 
-.links a:hover {
+a:hover {
     background-color:lightgray;
     transition: background-color 1s;
+    text-decoration: none;
 }
