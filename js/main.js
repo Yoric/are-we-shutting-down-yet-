@@ -2,7 +2,6 @@
   "use strict";
 
   var $ = id => document.getElementById(id);
-
   console.log("Starting");
 
 
@@ -393,9 +392,9 @@
     return list.sort((a, b) => a.hits <= b.hits);
   };
 
-  promise = promise.then((sorted) => {
-    schedule(showEverything, sorted, $("Results"));
-  });
+  promise = promise.then((sorted) =>
+    schedule(showEverything, sorted, $("Results"))
+  );
 
   var showEverything = function(sorted, eResults) {
     eResults.innerHTML = "";
@@ -441,8 +440,10 @@
       eCrash.appendChild(eStacks);
       schedule(showStacks, crash, eStacks);
     }
-
     eResults.classList.remove("loading");
   };
 
+  promise = promise.then(() => {
+    window.location.hash = window.location.hash;
+  });
 })();
