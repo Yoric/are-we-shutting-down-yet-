@@ -31,6 +31,8 @@
   };
 
   var showHistogram = function(crash, eStatistics) {
+    $("status").textContent = "Preparing histogram";
+
     var eCanvas = document.createElement("canvas");
     eStatistics.appendChild(eCanvas);
     var context = eCanvas.getContext("2d");
@@ -101,7 +103,9 @@
   };
 
   var showLinks = function(crash, eLinks) {
-    for (var age = 0; age < 10; ++age) {
+    $("status").textContent = "Preparing links";
+    const MAX_LINKS_PER_DAY = 20;
+    for (var age = 0; age < crash.data.byAge.length; ++age) {
       var thatDay = crash.data.byAge[age];
       if (!thatDay) {
         continue;
@@ -114,9 +118,17 @@
       var eDayLinks = document.createElement("ul");
       eSingleDay.appendChild(eDayLinks);
 
+      var linksInDay = 0;
       for (var sample of thatDay.all) {
         var eSampleLi = document.createElement("li");
         eDayLinks.appendChild(eSampleLi);
+
+        if (linksInDay++ >= MAX_LINKS_PER_DAY) {
+          eSampleLi.textContent = "[...] (omitted " +
+            (thatDay.all.length - MAX_LINKS_PER_DAY) + ")";
+          break;
+        }
+
 
         var eLink = document.createElement("a");
         eSampleLi.appendChild(eLink);
@@ -136,12 +148,17 @@
   };
 
   var showStacks = function(crash, eStacks) {
+    $("status").textContent = "Preparing stacks";
     eStacks.textContent = "No report contained a valid stack";
       
     // Search a sample with a stack
     var found = false;
     for (var sample of crash.data.all) {
       var condition = sample.conditions[0];
+      if (!condition || typeof condition != "object") {
+        console.error("The following condition is problematic", crash,
+                     crash.data);
+      }
       if (condition && !("stack" in condition)) {
         continue;
       }
@@ -172,66 +189,165 @@
     }
   };
 
-  /**
-   * Fetch the raw data from crash-stats.mozilla.com
-   */
-  var promiseRawData = function() {
-    var uri = "https://crash-stats.mozilla.com/api/SuperSearch/?async_shutdown_timeout=!__null__";
+  var fetch = function(uri, delay, attempts, message) {
+    if (!attempts) {
+      return new Promise(resolve => "Too many attempts");
+    }
 
     var xhr = new XMLHttpRequest();
-    var result = new Promise(resolve =>
+    var result = new Promise((resolve, reject) =>
       xhr.addEventListener("load", function(event) {
-        var response = JSON.parse(xhr.response);
-        resolve(response);
+        console.log("Load complete", xhr.status);
+        if (xhr.status == 429) {
+          var promise = wait(delay, message);
+          promise = promise.then(() => fetch(uri, delay * 2, attempts
+                                             - 1, message));
+          promise.then(resolve, reject);
+          return;
+        }
+
+        try {
+          var response = JSON.parse(xhr.response);
+          resolve(response);
+        } catch (ex) {
+          reject(response);
+        }
       }));
   
     xhr.open("GET", uri, true);
     xhr.send();
-    console.log("Downloading data");
     return result;
   };
-  
-  // Obtain results from server
-  var promise = promiseRawData();
 
-  // Group results by signature
-  promise = promise.then(result  => {
-    console.log("Grouping hits");
-
-    const total = result.total;
-    const hits = result.hits;
-    const now = Date.now();
-    const MS_PER_DAY = 1000 * 3600 * 24;
-
-    var map = new Map();
-
-    // Sort by version/date
-    hits.forEach(hit => {
-      hit.date = Date.parse(hit.date);
+  var wait = function(ms, message = "") {
+    if (ms) {
+      var content = "Waiting " + ms + " milliseconds to avoid "
+        + "DoS" + message;
+      $("status").textContent = content;
+    }
+    return new Promise(resolve => {
+      window.setTimeout(resolve, ms);
     });
-    hits.sort((h1, h2) => {
+  };
+
+  const BASE_URI = "https://crash-stats.mozilla.com/api/SuperSearch/?async_shutdown_timeout=!__null__&_results_number=";
+
+  var getServerCount = function() {
+    $("status").textContent = "Fetching size of sample";
+    var promise = fetch(BASE_URI + 1, 500, 10);
+    return promise.then(data => data.total);
+  };
+
+  var getBatch = function(start, number) {
+    var txtRange = "items " + start + " to " +
+      (start + number);
+    $("status").textContent = "Fetching " + txtRange;
+    console.log("Need to get batch", start, number);
+    var promise = fetch(BASE_URI + number + "&_results_offset=" +
+                        start, start, 10, "(fetching " + txtRange + ")");
+    return promise.then(data => {
+      console.log("Obtained batch", start, number);
+      $("status").textContent = "Received " + txtRange;
+      return data;
+    },
+    () => {
+      $("status").textContent = "Failed to fetch " + txtRange + ",  giving up";
+    });
+  };
+
+  // Fetch data piece-wise
+  (function() {
+    var gHits = [];
+    var promise = getServerCount();
+
+    var loop = function(start, stop, increment, cb) {
+      return new Promise((resolve, reject) => {
+        if (start > stop) {
+          resolve();
+          return;
+        }
+        var promise = cb(start);
+        promise = promise.then(() => loop(start + increment, stop,
+        increment, cb));
+        promise.then(resolve, reject);
+      });
+    };
+
+    promise = promise.then(count =>
+      loop(0, count / 100, 1, i => {
+        var promise = wait(i * 200);
+        promise = promise.then(() => getBatch(i * 100, 100));
+        promise = promise.then(batch => addBatch(batch, gHits));
+        promise = promise.then(() => schedule(buildData, gHits));
+        var data;
+        promise = promise.then(_data => data = _data);
+        promise = promise.then(() => schedule(setupColors, data));
+        promise = promise.then(() => schedule(sortHits, data));
+        var sorted;
+        promise = promise.then(_sorted => sorted = _sorted);
+        promise = promise.then(() => schedule(showEverything,
+        sorted, $("Results")));
+        promise = promise.then(() => {
+          $("status").textContent = "Display of batch " + i + " complete";
+          window.location.hash = window.location.hash;
+        });
+        return promise;
+      })
+    );
+
+    promise = promise.then(() =>
+      $("status").textContent = "Done"                    
+    );
+  })();
+
+  var addBatch = function(batch, destination) {
+    console.log("Rewriting batch", "adding", batch.hits.length, "to", destination.length);
+    batch.hits.forEach(hit => {
+      hit.date = Date.parse(hit.date);
+      hit.annotation = JSON.parse(hit.async_shutdown_timeout);
+      hit.annotation.hit = hit;
+      hit.annotation.conditions.forEach((condition, i) => {
+//        console.log("Examining condition", condition);
+        if (typeof condition == "string") {
+          // Deal with older format
+          console.log("Rewriting", hit);
+          hit.annotation.conditions[i] = { name: condition };
+        }
+      });
+    });
+    destination.push(...batch.hits);
+
+    console.log("Rewritten to", destination.length);
+
+    // Re-sort everything. Sadly, I don't think we can do better.
+    return destination.sort((h1, h2) => {
       if (h1.version == h2.version) {
         return h1.date >= h2.date;
       }
       return h1.version <= h2.version;
     });
+  };
+
+  // Group results by signature
+  var buildData = function(hits) {
+    console.log("Grouping hits");
+
+    const now = Date.now();
+    const MS_PER_DAY = 1000 * 3600 * 24;
+
+    var map = new Map();
 
     // Group hits by signature/day/version
     for (var hit of hits) {
       
       // Determine signature
-      var annotation = JSON.parse(hit.async_shutdown_timeout);
-      annotation.conditions.forEach((condition, i) => {
-        if (typeof condition == "string") {
-          // Deal with older format
-          annotation.conditions[i] = { name: condition };
-        }
-      });
-      annotation.hit = hit;
-      var names = [condition.name for (condition of annotation.conditions)].sort();
+      var annotation = hit.annotation;
+      var names = [condition.name for (condition of
+                                       annotation.conditions)].sort();
       var key = names.join(" | ");
-      if (key.length <= 0) {
-        console.log("Weird key", hit, annotation, names);
+      if (names == "" || names == " | ") {
+        console.log("Weird names", hit);
+        throw new Error("Weird names");
       }
 
       // Group by signature
@@ -244,7 +360,7 @@
         map.set(key, data);
       }
       data.all.push(annotation);
-            
+
       // Group by age
       var age = Math.floor((now - hit.date)/MS_PER_DAY);
       var thatDay = data.byAge[age];
@@ -262,12 +378,9 @@
       thatVersion.push(annotation);
     }
 
+    console.log("Map contains", map.size, "signatures");
+    console.log([...map]);
     return {
-      /**
-       * The total number of crashes during the time period.
-       */
-      numberOfCrashes: total,
-
       /**
        * All the hits.
        */
@@ -278,13 +391,13 @@
        */
       map: map,
     };
-  });
+  };
 
   // Grab the list of all versions involved
   var gColors = new Map();
   var gVersionsFilter = new Set();
 
-  promise = promise.then((data) => {
+  var setupColors = function(data) {
     console.log("Initializing colors");
 
     var nextVersionsFilter = null;
@@ -299,6 +412,7 @@
     var sorted = [...versions.keys()].sort();
 
     var eVersions = $("Versions");
+    eVersions.innerHTML = "";
     var eColors = document.createElement("ul");
     eVersions.appendChild(eColors);
 
@@ -355,13 +469,9 @@
     }
 
     return data;
-  });
+  };
 
   // Sort by number of hits
-  promise = promise.then((data) =>
-    schedule(sortHits, data)
-  );
-
   var sortHits = function(data) {
     var list = [];
     for (var [k, {all, byAge}] of data.map) {
@@ -369,6 +479,7 @@
       var byAge2 = [];
       var hits2 = 0;
       byAge.forEach((thatDay, i) => {
+        console.log("byAge", thatDay, i);
         if (!thatDay) {
           return;
         }
@@ -391,10 +502,6 @@
     }
     return list.sort((a, b) => a.hits <= b.hits);
   };
-
-  promise = promise.then((sorted) =>
-    schedule(showEverything, sorted, $("Results"))
-  );
 
   var showEverything = function(sorted, eResults) {
     eResults.innerHTML = "";
@@ -442,8 +549,4 @@
     }
     eResults.classList.remove("loading");
   };
-
-  promise = promise.then(() => {
-    window.location.hash = window.location.hash;
-  });
 })();
