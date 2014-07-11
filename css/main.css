@@ -3,10 +3,10 @@
     background-repeat:no-repeat;
     background-position:center;
     width: 100%;
+    min-height: 300px;
 }
 
 body {
-    min-height: 300px;
 }
 
 .crash {

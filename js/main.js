@@ -15,14 +15,16 @@
       }
       window.setTimeout(() => {
         try {
-          code(...args);
-          resolve();
+          var result = code(...args);
+          resolve(result);
         } catch (ex) {
           reject(ex);
-        }
-        for (var arg of args) {
-          if (arg && arg instanceof HTMLElement) {
-            arg.classList.remove("loading");
+          return;
+        } finally {
+          for (var arg of args) {
+            if (arg && arg instanceof HTMLElement) {
+              arg.classList.remove("loading");
+            }
           }
         }
       }, 0);
@@ -65,11 +67,12 @@
         for (var key of Object.keys(thatDay.byVersion).sort()) {
           console.log("Crash", crash.name, "age", age, "version", key, "color", gColors.get(key));
           var hits = thatDay.byVersion[key].length;
+          var product = thatDay.byVersion[key][0].hit.product;
           var height = hits * H;
           y0 = y0 - height;
           context.fillStyle = gColors.get(key);
           context.fillRect(x0, y0, width, height);
-          eCanvas.rectangles.push([x0, y0, width, height, key]);
+          eCanvas.rectangles.push([x0, y0, width, height, key, product]);
         }
       }
       context.fillStyle = "black";
@@ -87,9 +90,9 @@
         var x = event.clientX - bounds.left;
         var y = event.clientY - bounds.top;
 
-        for (var [x0, y0, w, h, name] of canvas.rectangles) {
+        for (var [x0, y0, w, h, name, product] of canvas.rectangles) {
           if (x >= x0 && y >= y0 && x < x + w && y < y + h) {
-            canvas.title = name;
+            canvas.title = product + " " + name;
             return;
           }
         }
@@ -191,7 +194,7 @@
   
   // Obtain results from server
   var promise = promiseRawData();
-  
+
   // Group results by signature
   promise = promise.then(result  => {
     console.log("Grouping hits");
@@ -202,6 +205,17 @@
     const MS_PER_DAY = 1000 * 3600 * 24;
 
     var map = new Map();
+
+    // Sort by version/date
+    hits.forEach(hit => {
+      hit.date = Date.parse(hit.date);
+    });
+    hits.sort((h1, h2) => {
+      if (h1.version == h2.version) {
+        return h1.date >= h2.date;
+      }
+      return h1.version <= h2.version;
+    });
 
     // Group hits by signature/day/version
     for (var hit of hits) {
@@ -233,8 +247,7 @@
       data.all.push(annotation);
             
       // Group by age
-      var date = Date.parse(hit.date);
-      var age = Math.floor((now - date)/MS_PER_DAY);
+      var age = Math.floor((now - hit.date)/MS_PER_DAY);
       var thatDay = data.byAge[age];
       if (!thatDay) {
         data.byAge[age] = thatDay = { hits: 0, all: [], byVersion: {} };
@@ -270,21 +283,25 @@
 
   // Grab the list of all versions involved
   var gColors = new Map();
+  var gVersionsFilter = new Set();
 
   promise = promise.then((data) => {
     console.log("Initializing colors");
 
-    var versions = new Set();
+    var nextVersionsFilter = null;
+    var updateDisplayTimeout = null;
+
+    var versions = new Map();
     for (var hit of data.all) {
-      versions.add(hit.version);
+      versions.set(hit.version, hit.product);
+      gVersionsFilter.add(hit.version);
     }
 
     var sorted = [...versions.keys()].sort();
 
-    var eResults = $("Results");
-    eResults.textContent = "The following versions have AsyncShutdownTimeout crashes";
+    var eVersions = $("Versions");
     var eColors = document.createElement("ul");
-    eResults.appendChild(eColors);
+    eVersions.appendChild(eColors);
 
     for (var i = 0; i < sorted.length; ++i) {
       var color = "rgba(" + Math.floor(255 * ( 1 - i / sorted.length ) ) + ", 100, 100, 1)";
@@ -292,25 +309,96 @@
 
       var eSingleColor = document.createElement("li");
       eColors.appendChild(eSingleColor);
-      eSingleColor.textContent = "Version: " + sorted[i];
+      eSingleColor.textContent = versions.get(sorted[i]) + " " + sorted[i];
       eSingleColor.style.color = color;
+
+      var eCheckBox = document.createElement("input");
+      eCheckBox.type = "checkbox";
+      eCheckBox.checked = "checked";
+      eSingleColor.appendChild(eCheckBox);
+
+      eCheckBox.addEventListener("change", (version => event => {
+        if (updateDisplayTimeout) {
+          window.clearTimeout(updateDisplayTimeout);
+          updateDisplayTimeout = null;
+        }
+        if (!nextVersionsFilter) {
+          nextVersionsFilter = new Set();
+          for (var k of gVersionsFilter.keys()) {
+            nextVersionsFilter.add(k);
+          }
+        }
+        if (event.target.checked) {
+          nextVersionsFilter.add(version);
+        } else {
+          nextVersionsFilter.delete(version);
+        }
+
+
+        updateDisplayTimeout = window.setTimeout(function() {
+          updateDisplayTimeout = null;
+          var oldKeys = [...gVersionsFilter.keys()].sort();
+          var newKeys = [...nextVersionsFilter.keys()].sort();
+          console.log("Should we update display?", oldKeys, newKeys);
+
+          if (oldKeys.join() != newKeys.join()) {
+            console.log("Yes, we do");
+            var promise = schedule(sortHits, data);
+            promise.then((sorted) =>
+              schedule(showEverything, sorted, $("Results"))
+            );
+          }
+          gVersionsFilter = nextVersionsFilter;
+          nextVersionsFilter = null;
+        }, 500);
+
+      })(sorted[i]));
     }
 
     return data;
   });
 
   // Sort by number of hits
-  promise = promise.then((data) => {
-    console.log("Sorting hits");
-    var list = [{name:k, data:v, hits:v.all.length} for ([k, v] of data.map)];
-    return list.sort((a, b) => a.hits <= b.hits);
-  });
+  promise = promise.then((data) =>
+    schedule(sortHits, data)
+  );
 
+  var sortHits = function(data) {
+    var list = [];
+    for (var [k, {all, byAge}] of data.map) {
+      var all2 = [];
+      var byAge2 = [];
+      var hits2 = 0;
+      byAge.forEach((thatDay, i) => {
+        if (!thatDay) {
+          return;
+        }
+        var thatDay2 = { hits: 0, all: [], byVersion: {} };
+        for (var version of Object.keys(thatDay.byVersion)) {
+          if (gVersionsFilter.has(version)) {
+            var thatVersion = thatDay.byVersion[version];
+            thatDay2.byVersion[version] = thatVersion;
+            thatDay2.hits += thatVersion.length;
+            thatDay2.all.push(...thatVersion);
+            all2.push(...thatVersion);
+          }
+        }
+        if (thatDay2.hits) {
+          hits2 += thatDay2.hits;
+          byAge2[i] = thatDay2;
+        }
+      });
+      list.push({name: k, data: {all: all2, byAge: byAge2}, hits: hits2});
+    }
+    return list.sort((a, b) => a.hits <= b.hits);
+  };
 
   promise = promise.then((sorted) => {
-    console.log("Displaying");
+    schedule(showEverything, sorted, $("Results"));
+  });
 
-    var eResults = $("Results");
+  var showEverything = function(sorted, eResults) {
+    eResults.innerHTML = "";
     for (var crash of sorted) {
       console.log("Crash", crash);
       var eCrash = document.createElement("div");
@@ -353,6 +441,6 @@
     }
 
     eResults.classList.remove("loading");
-  });
+  };
 
 })();
