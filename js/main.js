@@ -179,9 +179,7 @@
       $("status").textContent = msg;
     },
 
-
-
-    prepareHistogram: function(eStatistics, daysBack) {
+    prepareHistogram: function(eStatistics, key) {
       var eCanvas = document.createElement("canvas");
       eStatistics.appendChild(eCanvas);
       var context = eCanvas.getContext("2d");
@@ -192,14 +190,42 @@
       eCanvas.height = HEIGHT;
       eCanvas.style.width = WIDTH + "px";
       eCanvas.style.height = HEIGHT + "px";
+      var rectangles = [];
+      this._histogramRectangles.set(key, rectangles);
+
+      // Handle tooltip
+      var delayedMouseMove = null;
+      eCanvas.addEventListener("mousemove", function(event) {
+        if (delayedMouseMove) {
+          window.clearTimeout(delayedMouseMove);
+        }
+        delayedMouseMove = window.setTimeout(function() {
+          delayedMouseMove = null;
+          var bounds = eCanvas.getBoundingClientRect();
+          var x = event.clientX - bounds.left;
+          var y = event.clientY - bounds.top;
+
+          for (var [x0, y0, w, h, name] of rectangles) {
+            if (x >= x0 && y >= y0 && x < x + w && y < y + h) {
+              eCanvas.title = name;
+              return;
+            }
+          }
+        });
+        window.setTimeout(delayedMouseMove, 5);
+      });
       return context;
     },
 
+    _histogramRectangles: new Map(),
     updateHistogram: function(context, key, data) {
       const WIDTH = 300;
       const HEIGHT = 300;
       const DAYS_BACK = data.length;
       console.log("Days back", DAYS_BACK);
+
+      var rectangles = this._histogramRectangles.get(key);
+      rectangles.length = 0;
 
       // Determine max
       var max = 0;
@@ -226,6 +252,7 @@
           context.fillStyle = View._colors.get(key);
           console.log("Rectangle", x0, y0, W, height);
           context.fillRect(x0, y0, W, height);
+          rectangles.push([x0, y0, W, height, v[0]]);
         });
       });
 
@@ -271,26 +298,6 @@
         context.fillText("-" + age + "d", x0, HEIGHT - 10);
         context.fillText(thatDay ? thatDay.hits : "0", x0, 10);
       }
-      eCanvas.addEventListener("mousemove", function(event) {
-        var canvas = event.target;
-        if (canvas._delayedmousemove) {
-          window.clearTimeout(canvas._delayedmousemove);
-        }
-        canvas._delayedmousemove = window.setTimeout(function() {
-          canvas._delayedmousemove = null;
-          var bounds = canvas.getBoundingClientRect();
-          var x = event.clientX - bounds.left;
-          var y = event.clientY - bounds.top;
-
-          for (var [x0, y0, w, h, name, product] of canvas.rectangles) {
-            if (x >= x0 && y >= y0 && x < x + w && y < y + h) {
-              canvas.title = product + " " + name;
-              return;
-            }
-          }
-        });
-        window.setTimeout(canvas._delayedmousemove, 1);
-      });
     },
 
     showLinks: function(crash, eLinks) {
@@ -481,7 +488,7 @@
       // Show histogram
       var eStatistics = document.createElement("div");
       eStatistics.classList.add("statistics");
-      elements.context = View.prepareHistogram(eStatistics, daysBack);
+      elements.context = View.prepareHistogram(eStatistics, key);
       eCrash.appendChild(eStatistics);
       elements.eStatistics = eStatistics;
   
