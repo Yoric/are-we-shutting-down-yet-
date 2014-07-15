@@ -361,7 +361,11 @@
           var eLink = document.createElement("a");
           eSampleLi.appendChild(eLink);
           eLink.href = "https://crash-stats.mozilla.com/report/index/" + hit.uuid;
-          eLink.textContent = hit.uuid + " (" + hit.product + " " + hit.version + ")";
+          var version = hit.product + " " + hit.version;
+          if (hit.release_channel == "nightly") {
+            version += " " + hit.build_id;
+          }
+          eLink.textContent = hit.uuid + " (" +  version + ")";
 
 
           eSampleLi.title = JSON.stringify(hit.annotation, null, "\t");
