@@ -150,7 +150,7 @@
 
       return Util.fetch(Server.BASE_URI + sampleSize +
         "&date=>=" + isoDay +
-        "&date=<=" + isoNextDay,
+        "&date=<" + isoNextDay,
         100, 10);
     },
 
@@ -250,6 +250,7 @@
         return;
       }
 
+      // Display rectangles
       const H = HEIGHT/max;
       const W = WIDTH/DAYS_BACK;
       allDays.forEach((byDay, age) => {
@@ -272,8 +273,47 @@
           context.fillRect(x0, y0, W, height);
           rectangles.push([x0, y0, W, height, key + " (est. " + Math.ceil(hits.length * factor) + " crashes)"]);
         });
+
+        // Extract Nightly values
+        var [_, hits] = byVersion.sorted[0];
+        var nightlies = 0;
+        var thatDay = new Date();
+        thatDay.setDate(thatDay.getDate() - age);
+        console.log("Extracting nightlies for", thatDay);
+        hits.forEach(v => {
+          if (v.release_channel != "nightly") {
+            return;
+          }
+          var build_id = v.build_id;
+          var year = Number.parseInt(build_id.substring(0, 4));
+          var month = Number.parseInt(build_id.substring(4, 6));
+          var day = Number.parseInt(build_id.substring(6, 8));
+          var date = new Date();
+          date.setYear = year;
+          date.setMonth = month - 1;
+          date.setDate = day;
+          console.log("Nightly build", date, "we'd like", thatDay);
+          if (thatDay.getDate() != day) {
+            console.log("Wrong day", thatDay.getDate(), day);
+            return;
+          }
+          if (thatDay.getMonth() != month) {
+            console.log("Wrong month", thatDay.getMonth(), month);
+            return;
+          }
+          if (thatDay.getYear() != year) {
+            console.log("Wrong year", thatDay.getYear(), year);
+            return;
+          }
+          nightlies++;
+          console.log("Nightly", nightlies);
+        });
       });
 
+      // Display Nightly values
+      
+
+      // Display time graduations
       context.fillStyle = "black";
       for (var i = 0; i < DAYS_BACK; ++i) {
         context.fillText("-" + i + "d", WIDTH - W * (i + 1), HEIGHT - 10);
@@ -703,6 +743,11 @@
 
     var latestRun = 0;
 
+    /**
+     * Fetch data, run all analysis, display.
+     *
+     * If the data has already been fetched, use the in-memory cache.
+     */
     var main = function(filters = undefined) {
       Util.loop(0,
         age => age >= DAYS_BACK,
@@ -867,65 +912,7 @@
     };
     main();
 
-
     return;
-/*
-      var data = [];
-      return Util.loop(0,
-                       i => i < buffer.length,
-                       i => i + 1)(i => {
-        console.log("Rewriting chunk", i, "with size",
-          buffer[i].hits.length);
-        buffer[i].hits.forEach(hit => {
-          var item = {
-            date: Date.parse(hit.date),
-            annotation: JSON.parse(hit.async_shutdown_timeout),
-            hit: hit
-          };
-          item.annotation.conditions.forEach((condition, i) => {
-            if (typeof condition == "string") {
-              // Deal with older format
-              item.annotation.conditions[i] = { name: condition };
-            }
-          });
-          data.push(item);
-        });
-        return Util.wait(10).then(() => data);
-      });
-    });
-    return;
-*/
-    var gHits = [];
-    var promise = Server.getCount();
-
-    promise = promise.then(count =>
-      loop(0, count / 100, 1, i => {
-        var promise = Util.wait(i * 200);
-        promise = promise.then(() => Server.getBatch(i * 100, 100));
-        promise = promise.then(batch => Data.addBatch(batch, gHits));
-        promise = promise.then(() => schedule(Data.buildData, gHits));
-        var data;
-        promise = promise.then(_data => data = _data);
-        promise = promise.then(() => schedule(View.setupColors, data));
-        promise = promise.then(() => schedule(Data.sortHits, data, View._versionsFilter));
-        var sorted;
-        promise = promise.then(_sorted => sorted = _sorted);
-        promise = promise.then(() => {
-          console.log("A");
-          schedule(View.showEverything, sorted, $("Results"));
-          console.log("B");
-        });
-        promise = promise.then(() => {
-          status("Display of batch " + i + " complete");
-          window.location.hash = window.location.hash;
-        });
-        return promise;
-      })
-    );
-
-    promise = promise.then(() =>
-      status("Done")
-    );
   })();
 
 })();
