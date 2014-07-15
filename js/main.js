@@ -218,7 +218,7 @@
     },
 
     _histogramRectangles: new Map(),
-    updateHistogram: function(context, key, allDays) {
+    updateHistogram: function(context, key, allDays, factor) {
       const WIDTH = 300;
       const HEIGHT = 300;
       const DAYS_BACK = allDays.length;
@@ -269,7 +269,7 @@
           context.fillStyle = View._colors.get(key);
           console.log("Rectangle", x0, y0, W, height);
           context.fillRect(x0, y0, W, height);
-          rectangles.push([x0, y0, W, height, v[0]]);
+          rectangles.push([x0, y0, W, height, v[0] + " (est. " + Math.ceil(hits.length * factor) + " crashes)"]);
         });
       });
 
@@ -278,9 +278,9 @@
         context.fillText("-" + i + "d", WIDTH - W * (i + 1), HEIGHT - 10);
       }
     },
-    updateAllHistograms: function(allData) {
+    updateAllHistograms: function(allData, factor) {
       for (var [k, v] of this._elements) {
-        this.updateHistogram(v.context, k, allData);
+        this.updateHistogram(v.context, k, allData, factor);
       }
     },
 
@@ -762,8 +762,8 @@
           console.log("Normalized", data.normalized.length);
 
           var estimates = {};
+          var factor = data.total / data.normalized.length;
           gDataByDay.forEach(oneDay => {
-            var factor = data.total / data.normalized.length;
             oneDay.signatures.sorted.forEach(kv => {
               var [kind, signature] = kv;
               if (!(kind in estimates)) {
@@ -783,6 +783,7 @@
         });
 
         schedule("Updating histograms", data => {
+          var factor = data.total / data.normalized.length;
           for (var [kind, signature] of data.signatures.sorted) {
             // Counting instances per version
             var byVersion = {};
@@ -804,7 +805,7 @@
               total: total,
             };
           }
-          View.updateAllHistograms(gDataByDay);
+          View.updateAllHistograms(gDataByDay, factor);
           return data;
         });
 
