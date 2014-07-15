@@ -218,31 +218,48 @@
     },
 
     _histogramRectangles: new Map(),
-    updateHistogram: function(context, key, data) {
+    updateHistogram: function(context, key, allDays) {
       const WIDTH = 300;
       const HEIGHT = 300;
-      const DAYS_BACK = data.length;
+      const DAYS_BACK = allDays.length;
+      context.fillStyle = "white";
+      context.fillRect(0, 0, WIDTH, HEIGHT);
       console.log("Days back", DAYS_BACK);
+      console.log("updateHistogram", allDays);
 
       var rectangles = this._histogramRectangles.get(key);
       rectangles.length = 0;
 
       // Determine max
       var max = 0;
-      data.forEach(byDay => {
-        var byVersion = byDay.signatures.byKey[key].byVersion;
+      allDays.forEach((byDay, i) => {
+        console.log("updateHistogram", key, byDay, i, "out of", DAYS_BACK);
+        var byKey = byDay.signatures.byKey;
+        if (!(key in byKey)) {
+          // No such crash on that day
+          return;
+        }
+        var byVersion = byKey[key].byVersion;
         if (byVersion.total > max) {
           max = byVersion.total;
         }
       });
       console.log("Max", max);
+      if (max == 0) {
+        throw new Error("No max");
+      }
 
       const H = HEIGHT/max;
       const W = WIDTH/DAYS_BACK;
-      data.forEach((byDay, age) => {
+      allDays.forEach((byDay, age) => {
         var x0 = WIDTH - W * (age + 1);
         var y0 = HEIGHT;
-        var byVersion = byDay.signatures.byKey[key].byVersion;
+        var byKey = byDay.signatures.byKey;
+        if (!(key in byKey)) {
+          // No such crash on that day
+          return;
+        }
+        var byVersion = byKey[key].byVersion;
 
         byVersion.sorted.forEach((v, i) => {
           console.log("Updating version", v, i);
@@ -261,42 +278,9 @@
         context.fillText("-" + i + "d", WIDTH - W * (i + 1), HEIGHT - 10);
       }
     },
-    fooHistogram: function() {
-      // Compute scale
-      var maxHits = 0;
-      for (var age = 0; age < 10; ++age) {
-        var thatDay = crash.data.byAge[age];
-        if (thatDay) {
-          maxHits = Math.max(maxHits, thatDay.hits);
-        }
-      }
-
-      const W = 30;
-      const H = HEIGHT / maxHits;
-
-      eCanvas.rectangles = [];
-
-      // Now display actual histograms
-      for (age = 0; age < 10; ++age) {
-        thatDay = crash.data.byAge[age];
-        var x0 = WIDTH - W * age;
-        var y0 = HEIGHT;
-        if (thatDay) {
-          var width = W;
-          for (var key of Object.keys(thatDay.byVersion).sort()) {
-            console.log("Crash", crash.name, "age", age, "version", key, "color", View._colors.get(key));
-            var hits = thatDay.byVersion[key].length;
-            var product = thatDay.byVersion[key][0].hit.product;
-            var height = hits * H;
-            y0 = y0 - height;
-            context.fillStyle = View._colors.get(key);
-            context.fillRect(x0, y0, width, height);
-            eCanvas.rectangles.push([x0, y0, width, height, key, product]);
-          }
-        }
-        context.fillStyle = "black";
-        context.fillText("-" + age + "d", x0, HEIGHT - 10);
-        context.fillText(thatDay ? thatDay.hits : "0", x0, 10);
+    updateAllHistograms: function(allData) {
+      for (var [k, v] of this._elements) {
+        this.updateHistogram(v.context, k, allData);
       }
     },
 
@@ -451,6 +435,7 @@
         })(versions[i]));
       });
     },
+
 
     _elements: new Map(),
     prepareSignatureForDisplay: function(key, daysBack) {
@@ -714,8 +699,7 @@
   // Fetch data piece-wise
   (function() {
     const DAYS_BACK = 7;
-
-    var gCurrentAge = 0;
+    var gDataByDay = [];
 
     var schedule = function(status, code) {
       if (schedule.current == null) {
@@ -728,111 +712,118 @@
       }, copy).then(v => Util.schedule(code, v));
     };
 
+    Util.loop(0,
+      age => age >= DAYS_BACK,
+      age => age + 1)( age => {
 
-    schedule("Getting sample for day " + gCurrentAge,
-      () => Server.getSampleForAge(gCurrentAge, 200));
+      schedule("Getting sample for day " + age,
+        () => Server.getSampleForAge(age, 200));
 
-    schedule("Normalizing sample", sample => {
-      var age = 0;
-      console.log("Received a sample for the day", age, sample);
-      var normalized = Data.normalizeSample(sample);;
-      console.log("After rewriting", normalized);
+        schedule("Normalizing sample", sample => {
+          console.log("Received a sample for the day", age, sample);
+          var normalized = Data.normalizeSample(sample);;
+          console.log("After rewriting", normalized);
 
-      return {
-        total: sample.total,
-        normalized: normalized
-      };
-    });
+          return gDataByDay[age] = {
+            total: sample.total,
+            normalized: normalized
+          };
+        });
 
-    schedule("Extracting all versions involved", data => {
-      var versions = Data.getAllVersionsInvolved(data.normalized);
-      console.log("Versions involved", versions);
+        schedule("Extracting all versions involved", data => {
+          var versions = Data.getAllVersionsInvolved(data.normalized);
+          console.log("Versions involved", versions);
 
-      data.versions = versions;
-      return data;
-    });
+          data.versions = versions;
+          return data;
+        });
 
-    schedule("Setting up colors", data => {
-      View.setupColors(data.versions);
-      return data;
-    });
+        schedule("Setting up colors", data => {
+          View.setupColors(data.versions);
+          return data;
+        });
 
-    schedule("Extracting all signatures", data => {
-      status("Getting all signatures");
-      var signatures = Data.getAllSignaturesInvolved(data.normalized);
-      console.log("Signatures involved", signatures);
+        schedule("Extracting all signatures", data => {
+          status("Getting all signatures");
+          var signatures = Data.getAllSignaturesInvolved(data.normalized);
+          console.log("Signatures involved", signatures);
 
-      var list = [[k, signatures[k]] for (k of Object.keys(signatures))];
-      list.sort((x, y) => x[1].length <= y[1].length);
+          var list = [[k, signatures[k]] for (k of Object.keys(signatures))];
+          list.sort((x, y) => x[1].length <= y[1].length);
 
-      var byKey = {};
-      for (var k of Object.keys(signatures)) {
-        byKey[k] = {all: signatures[k]};
-      }
-
-      data.signatures = {
-        byKey: byKey,
-        sorted: list
-      };
-
-      return data;
-    });
-
-    schedule("Showing signatures", data => {
-      console.log("Total", data.total);
-      console.log("Normalized", data.normalized.length);
-      var factor = data.total / data.normalized.length;
-      console.log("Factor", factor);
-
-
-      for (var [kind, signature] of data.signatures.sorted) {
-        console.log("Displaying signature", kind);
-        var estimate =  Math.ceil(signature.length * factor); // FIXME: This should actually be summed for all days
-        console.log("Estimate", estimate);
-        var display = View.prepareSignatureForDisplay(kind, DAYS_BACK);
-        console.log("Display");
-        display.eHits.textContent = "Crashes: " + estimate + " (est)";
-      };
-      return data;
-    });
-
-    schedule("Updating histogram for day " + gCurrentAge, data => {
-      for (var [kind, signature] of data.signatures.sorted) {
-        var display = View.prepareSignatureForDisplay(kind,
-        DAYS_BACK);
-
-        // Counting instances per version
-        var byVersion = {};
-        var total = 0; // FIXME: This should actually be maxed for all days
-        for (var hit of signature) {
-          var key = hit.product + " " + hit.version;
-          if (!(key in byVersion)) {
-            byVersion[key] = [];
+          var byKey = {};
+          for (var k of Object.keys(signatures)) {
+            byKey[k] = {all: signatures[k]};
           }
-          byVersion[key].push(hit);
-          total++;
-        }
-        var sorted = [[k, byVersion[k]] for (k of Object.keys(byVersion))];
-        sorted.sort((x, y) => x[0] > y[0]);
 
-        data.signatures.byKey[kind].byVersion = {
-          all: byVersion,
-          sorted: sorted,
-          total: total,
-        };
+          data.signatures = {
+            byKey: byKey,
+            sorted: list
+          };
 
-        View.updateHistogram(display.context, kind, [data]); // FIXME: Obviously not quite `data`.
-      }
-      return data;
-    });
+          return data;
+        });
 
-    schedule("Done", () => {
-      $("Results").classList.remove("loading");
-    });
+        schedule("Showing signatures", data => {
+          console.log("Total", data.total);
+          console.log("Normalized", data.normalized.length);
 
+          var estimates = {};
+          gDataByDay.forEach(oneDay => {
+            var factor = data.total / data.normalized.length;
+            oneDay.signatures.sorted.forEach(kv => {
+              var [kind, signature] = kv;
+              if (!(kind in estimates)) {
+                estimates[kind] = 0;
+              }
+              estimates[kind] += signature.length * factor;
+            });
+          });
+
+          for (var [kind, signature] of data.signatures.sorted) {
+            console.log("Displaying signature", kind);
+            var display = View.prepareSignatureForDisplay(kind, DAYS_BACK);
+            console.log("Display");
+            display.eHits.textContent = "Crashes: " + Math.ceil(estimates[kind]) + " (est for " + gDataByDay.length + " days )";
+          };
+          return data;
+        });
+
+        schedule("Updating histograms", data => {
+          for (var [kind, signature] of data.signatures.sorted) {
+            // Counting instances per version
+            var byVersion = {};
+            var total = 0;
+            for (var hit of signature) {
+              var key = hit.product + " " + hit.version;
+              if (!(key in byVersion)) {
+              byVersion[key] = [];
+              }
+              byVersion[key].push(hit);
+              total++;
+            }
+            var sorted = [[k, byVersion[k]] for (k of Object.keys(byVersion))];
+            sorted.sort((x, y) => x[0] > y[0]);
+
+            data.signatures.byKey[kind].byVersion = {
+              all: byVersion,
+              sorted: sorted,
+              total: total,
+            };
+          }
+          View.updateAllHistograms(gDataByDay);
+          return data;
+        });
+
+        return schedule("Done", () => {
+          window.location.hash = window.location.hash;
+          $("Results").classList.remove("loading");
+          return new Promise(resolve => window.setTimeout(resolve, 1000));
+        });
+
+      });
     // FIXME: Show links
     // FIXME: Handle updates
-    // FIXME: Handle canvas.title
 
 
     return;
