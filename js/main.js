@@ -296,25 +296,30 @@
       eSingleDay.appendChild(eDayLinks);
 
       var linksInDay = 0;
-      signature.forEach(hit => {
-        var eSampleLi = document.createElement("li");
-        eDayLinks.appendChild(eSampleLi);
+      var ENOUGH = new Error("Enough samples, bailing out");
+      try {
+        signature.forEach(hit => {
+          var eSampleLi = document.createElement("li");
+          eDayLinks.appendChild(eSampleLi);
 
-        if (linksInDay++ >= MAX_LINKS_PER_DAY) {
-          eSampleLi.textContent = "[...] (omitted " +
-            (signature.length - MAX_LINKS_PER_DAY) + ")";
-          return;
-        }
-
-
-        var eLink = document.createElement("a");
-        eSampleLi.appendChild(eLink);
-        eLink.href = "https://crash-stats.mozilla.com/report/index/" + hit.uuid;
-        eLink.textContent = hit.uuid + " (" + hit.product + " " + hit.version + ")";
+          if (linksInDay++ >= MAX_LINKS_PER_DAY) {
+            eSampleLi.textContent = "[...] (omitted " +
+              (signature.length - MAX_LINKS_PER_DAY) + ")";
+            throw ENOUGH;
+          }
 
 
-        eSampleLi.title = JSON.stringify(hit.annotation, null, "\t");
-      });
+          var eLink = document.createElement("a");
+          eSampleLi.appendChild(eLink);
+          eLink.href = "https://crash-stats.mozilla.com/report/index/" + hit.uuid;
+          eLink.textContent = hit.uuid + " (" + hit.product + " " + hit.version + ")";
+
+
+          eSampleLi.title = JSON.stringify(hit.annotation, null, "\t");
+        });
+      } catch (ex if ex == ENOUGH) {
+        // Ok, we just bailed out
+      }
     },
 
     showStacks: function(crash, eStacks) {
