@@ -10,31 +10,35 @@
         console.error("No code", new Error().stack);
         throw new Error("No code");
       }
-      return new Promise((resolve, reject) => {
-        for (var arg of args) {
-          if (arg && arg instanceof HTMLElement) {
-            arg.classList.add("loading");
-          }
-        }
-        window.setTimeout(() => {
-          try {
-            var result = code(...args);
-            resolve(result);
-          } catch (ex) {
-            reject(ex);
-            return;
-          } finally {
-            for (var arg of args) {
-              if (arg && arg instanceof HTMLElement) {
-                arg.classList.remove("loading");
-              }
+      return Promise.all(args).then(args =>
+        new Promise((resolve, reject) => {
+          for (var arg of args) {
+            if (arg && arg instanceof HTMLElement) {
+              arg.classList.add("loading");
             }
           }
-        }, 0);
-      });
+          window.setTimeout(() => {
+            try {
+              var result = code(...args);
+              resolve(result);
+            } catch (ex) {
+              console.error(ex);
+              reject(ex);
+              return;
+            } finally {
+              for (var arg of args) {
+                if (arg && arg instanceof HTMLElement) {
+                  arg.classList.remove("loading");
+                }
+              }
+            }
+          }, 0);
+        })
+      );
     },
 
     fetch: function(uri, delay, attempts, message) {
+      console.log("Attempting to fetch", uri, "with", attempts, "attempts remaining");
       if (!attempts) {
         return new Promise(resolve => "Too many attempts");
       }
@@ -42,7 +46,7 @@
       var xhr = new XMLHttpRequest();
       var result = new Promise((resolve, reject) =>
         xhr.addEventListener("load", function(event) {
-          console.log("Load complete", xhr.status);
+          console.log("Fetch", uri, "complete", xhr.status);
           if (xhr.status == 429) {
             var promise = Util.wait(delay, message);
             promise = promise.then(() => Util.fetch(uri, delay * 2, attempts
@@ -75,6 +79,22 @@
       });
     },
 
+    loop: (init, stop, next) => (
+      cb =>
+        (function aux(acc) {
+          return new Promise((resolve, reject) => {
+            if (stop(acc)) {
+              resolve();
+              return;
+            }
+            var promise = cb(acc);
+            promise = promise.then(
+              () => aux(next(acc))
+            );
+            promise.then(resolve, reject);
+          });
+        })(init)
+    ),
   };
 
   var Server = {
@@ -82,6 +102,56 @@
       status("Fetching size of sample");
       var promise = Util.fetch(Server.BASE_URI + 1, 500, 10);
       return promise.then(data => data.total);
+    },
+
+    getAllMatching: function(suffix, description, chunkSize = 100) {
+      var promise = Util.fetch(Server.BASE_URI + 1 + suffix, 100, 10);
+      promise = promise.then(data => {
+        var total = data.total;
+        var buffer = [];
+        return Util.loop(0,
+                         x => x * chunkSize > total,
+                         x => x + 1)(i => {
+          status("Fetching items " + (i * chunkSize) + "-" +
+                 ( (i + 1) * chunkSize ) + "/" +
+                 total + " for " + description);
+          var promise = Util.fetch(Server.BASE_URI + chunkSize +
+                                   "&_results_offset=" + i *
+                                   chunkSize,
+                                   100, 10);
+          promise = promise.then(batch => {
+            status("Obtained items " + (i * chunkSize) + "-" +
+                   ( (i + 1) * chunkSize ) + "/" +
+                   total + " for " + description);
+            buffer.push(batch);
+            return buffer;
+          });
+          return promise;
+        });
+      });
+      return promise;
+    },
+
+    /**
+     * Get a sample of data for a given day
+     *
+     * @param {number} daysAgo A number (>=0)
+     * @param {number} sampleSize
+     *
+     * @return {array} An array of payloads
+     */
+    getSampleForAge: function(daysAgo, sampleSize = 100) {
+      var date = new Date();
+      date.setDate(date.getDate() - daysAgo);
+      var isoDay = date.toISOString().substring(0, 10);
+      status("Fetching data for " + isoDay);
+      date.setDate(date.getDate() + 1);      
+      var isoNextDay = date.toISOString().substring(0, 10);
+
+      return Util.fetch(Server.BASE_URI + sampleSize +
+        "&date=>=" + isoDay +
+        "&date=<=" + isoNextDay,
+        100, 10);
     },
 
     getBatch: function(start, number) {
@@ -109,9 +179,9 @@
       $("status").textContent = msg;
     },
 
-    showHistogram: function(crash, eStatistics) {
-      status("Preparing histogram");
 
+
+    prepareHistogram: function(eStatistics, daysBack) {
       var eCanvas = document.createElement("canvas");
       eStatistics.appendChild(eCanvas);
       var context = eCanvas.getContext("2d");
@@ -123,6 +193,13 @@
       eCanvas.style.width = WIDTH + "px";
       eCanvas.style.height = HEIGHT + "px";
 
+      const W = WIDTH/daysBack;
+      for (var age = 0; age < daysBack; ++age) {
+        context.fillText("-" + age + "d", WIDTH - W * age, HEIGHT - 10);
+      }
+    },
+
+    fooHistogram: function() {
       // Compute scale
       var maxHits = 0;
       for (var age = 0; age < 10; ++age) {
@@ -272,32 +349,24 @@
     _colors: new Map(),
     _versionsFilter: new Set(),
 
-    setupColors: function(data) {
+    setupColors: function(versions, displayWithFilter) {
       console.log("Initializing colors");
 
       var nextVersionsFilter = null;
       var updateDisplayTimeout = null;
-
-      var versions = new Map();
-      for (var hit of data.all) {
-        versions.set(hit.version, hit.product);
-        View._versionsFilter.add(hit.version);
-      }
-
-      var sorted = [...versions.keys()].sort();
 
       var eVersions = $("Versions");
       eVersions.innerHTML = "";
       var eColors = document.createElement("ul");
       eVersions.appendChild(eColors);
 
-      for (var i = 0; i < sorted.length; ++i) {
-        var color = "rgba(" + Math.floor(255 * ( 1 - i / sorted.length ) ) + ", 100, 100, 1)";
-        View._colors.set(sorted[i], color);
+      versions.forEach((version, i) => {
+        var color = "rgba(" + Math.floor(255 * ( 1 - i / versions.length ) ) + ", 100, 100, 1)";
+        View._colors.set(version, color);
 
         var eSingleColor = document.createElement("li");
         eColors.appendChild(eSingleColor);
-        eSingleColor.textContent = versions.get(sorted[i]) + " " + sorted[i];
+        eSingleColor.textContent = version;
         eSingleColor.style.color = color;
 
         var eCheckBox = document.createElement("input");
@@ -331,19 +400,70 @@
 
             if (oldKeys.join() != newKeys.join()) {
               console.log("Yes, we do");
-              var promise = schedule(Data.sortHits, data, View._versionsFilter);
-              promise.then((sorted) =>
-                schedule(View.showEverything, sorted, $("Results"))
-              );
+              schedule(displayWithFilter, nextVersionsFilter);
             }
             View._versionsFilter = nextVersionsFilter;
             nextVersionsFilter = null;
           }, 500);
 
-        })(sorted[i]));
+        })(versions[i]));
+      });
+    },
+
+    _elements: new Map(),
+    prepareSignatureForDisplay: function(key, daysBack) {
+      if (this._elements.has(key)) {
+        return this._elements.get(key);
       }
 
-      return data;
+      var elements = {};
+      var eResults = $("Results");
+
+      var eCrash = document.createElement("div");
+      eCrash.classList.add("crash");
+      eResults.appendChild(eCrash);
+      elements.eCrash = eCrash;
+
+      var eHeader = document.createElement("div");
+      eHeader.classList.add("header");
+      eCrash.appendChild(eHeader);
+      elements.eHeader = eHeader;
+
+      // Show signature and number of hits
+      var eSignature = document.createElement("a");
+      eSignature.classList.add("signature");
+      eSignature.textContent = key;
+      eSignature.name = key;
+      eSignature.href = "#" + key;
+      eHeader.appendChild(eSignature);
+      elements.eSignature = eSignature;
+
+      var eHits = document.createElement("span");
+      eHits.classList.add("hits");
+      eHeader.appendChild(eHits);
+      elements.eHits = eHits;
+
+      // Show histogram
+      var eStatistics = document.createElement("div");
+      eStatistics.classList.add("statistics");
+      View.prepareHistogram(eStatistics, daysBack);
+      eCrash.appendChild(eStatistics);
+      elements.eStatistics = eStatistics;
+
+      // Show links
+      var eLinks = document.createElement("ul");
+      eLinks.classList.add("links");
+      eCrash.appendChild(eLinks);
+      elements.eLinks = eLinks;
+
+      // Show stacks
+      var eStacks = document.createElement("div");
+      eStacks.classList.add("stacks");
+      eCrash.appendChild(eStacks);
+      elements.eStacks = eStacks;
+
+      this._elements.set(key, elements);
+      return elements;
     },
 
     showEverything: function(sorted, eResults) {
@@ -396,28 +516,52 @@
   };
 
   var Data = {
-    addBatch: function(batch, destination) {
-      console.log("Rewriting batch", "adding", batch.hits.length, "to", destination.length);
-      batch.hits.forEach(hit => {
-        hit.date = Date.parse(hit.date);
-        hit.annotation = JSON.parse(hit.async_shutdown_timeout);
-        hit.annotation.hit = hit;
-        hit.annotation.conditions.forEach((condition, i) => {
+    normalizeSample: function(sample) {
+      var hits = sample.hits.map(hit => {
+        var result = {};
+        for (var k of Object.keys(hit)) {
+          result[k] = hit[k];
+        }
+        result.date = Date.parse(hit.date);
+        result.annotation = JSON.parse(hit.async_shutdown_timeout);
+        result.annotation.conditions.forEach((condition, i) => {
           if (typeof condition == "string") {
             // Deal with older format
-            hit.annotation.conditions[i] = { name: condition };
+            result.annotation.conditions[i] = { name: condition };
           }
         });
+        result.hit = hit;
+        delete result.async_shutdown_timeout;
+        return result;
       });
-      destination.push(...batch.hits);
-
-      // Re-sort everything. Sadly, I don't think we can do better.
-      return destination.sort((h1, h2) => {
+      return hits.sort((h1, h2) => {
         if (h1.version == h2.version) {
           return h1.date >= h2.date;
         }
         return h1.version <= h2.version;
       });
+    },
+
+    getAllVersionsInvolved: function(normalized) {
+      var versions = {};
+      for (var hit of normalized) {
+        versions[hit.product + " " + hit.version] = true;
+      }
+      return Object.keys(versions).sort();
+    },
+
+    getAllSignaturesInvolved: function(normalized) {
+      var signatures = {};
+      for (var hit of normalized) {
+        var names = [condition.name for (condition of
+          hit.annotation.conditions)].sort();
+        var key = names.join(" | ");
+        if (!(key in signatures)) {
+          signatures[key] = [];
+        }
+        signatures[key].push(hit);
+      }
+      return signatures;
     },
 
     // Group results by signature
@@ -527,21 +671,119 @@
 
   // Fetch data piece-wise
   (function() {
+    const DAYS_BACK = 7;
+
+    var gCurrentAge = 0;
+
+    var schedule = function(status, code) {
+      if (schedule.current == null) {
+        schedule.current = Promise.resolve();
+      }
+      var copy = schedule.current;
+      return schedule.current = Util.schedule(v => {
+        View.status(status);
+        return v;
+      }, copy).then(v => Util.schedule(code, v));
+    };
+
+
+    schedule("Getting sample for day " + gCurrentAge,
+      () => Server.getSampleForAge(gCurrentAge, 200));
+
+    schedule("Normalizing sample", sample => {
+      var age = 0;
+      console.log("Received a sample for the day", age, sample);
+      var normalized = Data.normalizeSample(sample);;
+      console.log("After rewriting", normalized);
+
+      return {
+        total: sample.total,
+        normalized: normalized
+      };
+    });
+
+    schedule("Extracting all versions involved", data => {
+      var versions = Data.getAllVersionsInvolved(data.normalized);
+      console.log("Versions involved", versions);
+
+      data.versions = versions;
+      return data;
+    });
+
+    schedule("Setting up colors", data => {
+      View.setupColors(data.versions);
+      return data;
+    });
+
+    schedule("Extracting all signatures", data => {
+      status("Getting all signatures");
+      var signatures = Data.getAllSignaturesInvolved(data.normalized);
+      console.log("Signatures involved", signatures);
+
+      data.signatures = signatures;
+      return data;
+    });
+
+    schedule("Showing signatures", data => {
+      console.log("Total", data.total);
+      console.log("Normalized", data.normalized.length);
+      var factor = data.total / data.normalized.length;
+      console.log("Factor", factor);
+
+      var list = [[k, data.signatures[k]] for (k of Object.keys(data.signatures))];
+      list.sort((x, y) => x[1].length <= y[1].length);
+
+      for (var [kind, signature] of list) {
+        console.log("Displaying signature", kind);
+        var estimate =  Math.ceil(signature.length * factor); // FIXME: This should actually be summed for all days
+        console.log("Estimate", estimate);
+        var display = View.prepareSignatureForDisplay(kind, DAYS_BACK);
+        console.log("Display");
+        display.eHits.textContent = "Crashes: " + estimate + " (est)";
+      };
+      return data;
+    });
+
+    schedule("Updating histogram for day " + gCurrentAge, data => {
+    });
+
+    schedule("Done", () => {});
+
+    // FIXME: Display/update all versions involved
+    // FIXME: Show list of signatures
+    // FIXME: Show histogram
+    // FIXME: Show links
+
+
+    return;
+/*
+      var data = [];
+      return Util.loop(0,
+                       i => i < buffer.length,
+                       i => i + 1)(i => {
+        console.log("Rewriting chunk", i, "with size",
+          buffer[i].hits.length);
+        buffer[i].hits.forEach(hit => {
+          var item = {
+            date: Date.parse(hit.date),
+            annotation: JSON.parse(hit.async_shutdown_timeout),
+            hit: hit
+          };
+          item.annotation.conditions.forEach((condition, i) => {
+            if (typeof condition == "string") {
+              // Deal with older format
+              item.annotation.conditions[i] = { name: condition };
+            }
+          });
+          data.push(item);
+        });
+        return Util.wait(10).then(() => data);
+      });
+    });
+    return;
+*/
     var gHits = [];
     var promise = Server.getCount();
-
-    var loop = function(start, stop, increment, cb) {
-      return new Promise((resolve, reject) => {
-        if (start > stop) {
-          resolve();
-          return;
-        }
-        var promise = cb(start);
-        promise = promise.then(() => loop(start + increment, stop,
-        increment, cb));
-        promise.then(resolve, reject);
-      });
-    };
 
     promise = promise.then(count =>
       loop(0, count / 100, 1, i => {
