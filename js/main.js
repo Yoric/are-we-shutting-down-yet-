@@ -192,13 +192,48 @@
       eCanvas.height = HEIGHT;
       eCanvas.style.width = WIDTH + "px";
       eCanvas.style.height = HEIGHT + "px";
-
-      const W = WIDTH/daysBack;
-      for (var age = 0; age < daysBack; ++age) {
-        context.fillText("-" + age + "d", WIDTH - W * age, HEIGHT - 10);
-      }
+      return context;
     },
 
+    updateHistogram: function(context, key, data) {
+      const WIDTH = 300;
+      const HEIGHT = 300;
+      const DAYS_BACK = data.length;
+      console.log("Days back", DAYS_BACK);
+
+      // Determine max
+      var max = 0;
+      data.forEach(byDay => {
+        var byVersion = byDay.signatures.byKey[key].byVersion;
+        if (byVersion.total > max) {
+          max = byVersion.total;
+        }
+      });
+      console.log("Max", max);
+
+      const H = HEIGHT/max;
+      const W = WIDTH/DAYS_BACK;
+      data.forEach((byDay, age) => {
+        var x0 = WIDTH - W * (age + 1);
+        var y0 = HEIGHT;
+        var byVersion = byDay.signatures.byKey[key].byVersion;
+
+        byVersion.sorted.forEach((v, i) => {
+          console.log("Updating version", v, i);
+          var [key, hits] = v;
+          var height = hits.length * H;
+          y0 = y0 - height;
+          context.fillStyle = View._colors.get(key);
+          console.log("Rectangle", x0, y0, W, height);
+          context.fillRect(x0, y0, W, height);
+        });
+      });
+
+      context.fillStyle = "black";
+      for (var i = 0; i < DAYS_BACK; ++i) {
+        context.fillText("-" + i + "d", WIDTH - W * (i + 1), HEIGHT - 10);
+      }
+    },
     fooHistogram: function() {
       // Compute scale
       var maxHits = 0;
@@ -446,10 +481,10 @@
       // Show histogram
       var eStatistics = document.createElement("div");
       eStatistics.classList.add("statistics");
-      View.prepareHistogram(eStatistics, daysBack);
+      elements.context = View.prepareHistogram(eStatistics, daysBack);
       eCrash.appendChild(eStatistics);
       elements.eStatistics = eStatistics;
-
+  
       // Show links
       var eLinks = document.createElement("ul");
       eLinks.classList.add("links");
@@ -720,7 +755,19 @@
       var signatures = Data.getAllSignaturesInvolved(data.normalized);
       console.log("Signatures involved", signatures);
 
-      data.signatures = signatures;
+      var list = [[k, signatures[k]] for (k of Object.keys(signatures))];
+      list.sort((x, y) => x[1].length <= y[1].length);
+
+      var byKey = {};
+      for (var k of Object.keys(signatures)) {
+        byKey[k] = {all: signatures[k]};
+      }
+
+      data.signatures = {
+        byKey: byKey,
+        sorted: list
+      };
+
       return data;
     });
 
@@ -730,10 +777,8 @@
       var factor = data.total / data.normalized.length;
       console.log("Factor", factor);
 
-      var list = [[k, data.signatures[k]] for (k of Object.keys(data.signatures))];
-      list.sort((x, y) => x[1].length <= y[1].length);
 
-      for (var [kind, signature] of list) {
+      for (var [kind, signature] of data.signatures.sorted) {
         console.log("Displaying signature", kind);
         var estimate =  Math.ceil(signature.length * factor); // FIXME: This should actually be summed for all days
         console.log("Estimate", estimate);
@@ -745,14 +790,42 @@
     });
 
     schedule("Updating histogram for day " + gCurrentAge, data => {
+      for (var [kind, signature] of data.signatures.sorted) {
+        var display = View.prepareSignatureForDisplay(kind,
+        DAYS_BACK);
+
+        // Counting instances per version
+        var byVersion = {};
+        var total = 0; // FIXME: This should actually be maxed for all days
+        for (var hit of signature) {
+          var key = hit.product + " " + hit.version;
+          if (!(key in byVersion)) {
+            byVersion[key] = [];
+          }
+          byVersion[key].push(hit);
+          total++;
+        }
+        var sorted = [[k, byVersion[k]] for (k of Object.keys(byVersion))];
+        sorted.sort((x, y) => x[0] > y[0]);
+
+        data.signatures.byKey[kind].byVersion = {
+          all: byVersion,
+          sorted: sorted,
+          total: total,
+        };
+
+        View.updateHistogram(display.context, kind, [data]); // FIXME: Obviously not quite `data`.
+      }
+      return data;
     });
 
-    schedule("Done", () => {});
+    schedule("Done", () => {
+      $("Results").classList.remove("loading");
+    });
 
-    // FIXME: Display/update all versions involved
-    // FIXME: Show list of signatures
-    // FIXME: Show histogram
     // FIXME: Show links
+    // FIXME: Handle updates
+    // FIXME: Handle canvas.title
 
 
     return;
