@@ -284,49 +284,37 @@
       }
     },
 
-    showLinks: function(crash, eLinks) {
-      status("Preparing links");
+    showLinks: function(kind, age, signature) {
       const MAX_LINKS_PER_DAY = 20;
-      for (var age = 0; age < crash.data.byAge.length; ++age) {
-        var thatDay = crash.data.byAge[age];
-        if (!thatDay) {
-          continue;
+      var eLinks = this._elements.get(kind).eLinks;
+
+      var eSingleDay = document.createElement("li");
+      eSingleDay.textContent = age + " days ago ";
+      eLinks.appendChild(eSingleDay);
+
+      var eDayLinks = document.createElement("ul");
+      eSingleDay.appendChild(eDayLinks);
+
+      var linksInDay = 0;
+      signature.forEach(hit => {
+        var eSampleLi = document.createElement("li");
+        eDayLinks.appendChild(eSampleLi);
+
+        if (linksInDay++ >= MAX_LINKS_PER_DAY) {
+          eSampleLi.textContent = "[...] (omitted " +
+            (signature.length - MAX_LINKS_PER_DAY) + ")";
+          return;
         }
 
-        var eSingleDay = document.createElement("li");
-        eSingleDay.textContent = age + " days ago ";
-        eLinks.appendChild(eSingleDay);
 
-        var eDayLinks = document.createElement("ul");
-        eSingleDay.appendChild(eDayLinks);
-
-        var linksInDay = 0;
-        for (var sample of thatDay.all) {
-          var eSampleLi = document.createElement("li");
-          eDayLinks.appendChild(eSampleLi);
-
-          if (linksInDay++ >= MAX_LINKS_PER_DAY) {
-            eSampleLi.textContent = "[...] (omitted " +
-              (thatDay.all.length - MAX_LINKS_PER_DAY) + ")";
-            break;
-          }
+        var eLink = document.createElement("a");
+        eSampleLi.appendChild(eLink);
+        eLink.href = "https://crash-stats.mozilla.com/report/index/" + hit.uuid;
+        eLink.textContent = hit.uuid + " (" + hit.product + " " + hit.version + ")";
 
 
-          var eLink = document.createElement("a");
-          eSampleLi.appendChild(eLink);
-          eLink.href = "https://crash-stats.mozilla.com/report/index/" + sample.hit.uuid;
-          eLink.textContent = sample.hit.uuid + " (" + sample.hit.version + ")";
-
-
-          // Create a shallow copy of the sample without `hit` for serialiation purposes
-          var noHit = {};
-          for (var k of Object.keys(sample)) {
-            noHit[k] = sample[k];
-          }
-          delete noHit.hit;
-          eSampleLi.title = JSON.stringify(noHit, null, "\t");
-        }
-      }
+        eSampleLi.title = JSON.stringify(hit.annotation, null, "\t");
+      });
     },
 
     showStacks: function(crash, eStacks) {
@@ -784,7 +772,7 @@
             console.log("Displaying signature", kind);
             var display = View.prepareSignatureForDisplay(kind, DAYS_BACK);
             console.log("Display");
-            display.eHits.textContent = "Crashes: " + Math.ceil(estimates[kind]) + " (est for " + gDataByDay.length + " days )";
+            display.eHits.textContent = "Crashes: " + Math.ceil(estimates[kind]) + " (est total for " + gDataByDay.length + " days)";
           };
           return data;
         });
@@ -814,6 +802,15 @@
           View.updateAllHistograms(gDataByDay);
           return data;
         });
+
+        schedule("Updating links", data => {
+          for (var [kind, signature] of data.signatures.sorted) {
+            View.showLinks(kind, age, signature);
+          }
+
+          return data;
+        });
+
 
         return schedule("Done", () => {
           window.location.hash = window.location.hash;
