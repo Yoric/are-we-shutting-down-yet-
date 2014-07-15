@@ -244,9 +244,10 @@
           max = byVersion.total;
         }
       });
-      console.log("Max", max);
       if (max == 0) {
-        throw new Error("No max");
+        // Histogram is empty
+        console.log("Histogram", key, "is empty");
+        return;
       }
 
       const H = HEIGHT/max;
@@ -269,7 +270,7 @@
           context.fillStyle = View._colors.get(key);
           console.log("Rectangle", x0, y0, W, height);
           context.fillRect(x0, y0, W, height);
-          rectangles.push([x0, y0, W, height, v[0] + " (est. " + Math.ceil(hits.length * factor) + " crashes)"]);
+          rectangles.push([x0, y0, W, height, key + " (est. " + Math.ceil(hits.length * factor) + " crashes)"]);
         });
       });
 
@@ -287,9 +288,17 @@
     showLinks: function(kind, age, signature) {
       const MAX_LINKS_PER_DAY = 20;
       var eLinks = this._elements.get(kind).eLinks;
+      var title = age + " days ago ";
 
-      var eSingleDay = document.createElement("li");
-      eSingleDay.textContent = age + " days ago ";
+      var eSingleDay;
+      var children = [...eLinks.children];
+      eSingleDay = children.find(x => x.textContent == title);
+      if (eSingleDay) {
+        eSingleDay.innerHTML = "";
+      } else {
+        eSingleDay = document.createElement("li");
+        eSingleDay.textContent = title;
+      }
       eLinks.appendChild(eSingleDay);
 
       var eDayLinks = document.createElement("ul");
@@ -366,18 +375,17 @@
 
     // Grab the list of all versions involved
     _colors: new Map(),
-    _versionsFilter: new Set(),
-
     setupColors: function(versions, displayWithFilter) {
       console.log("Initializing colors");
 
-      var nextVersionsFilter = null;
       var updateDisplayTimeout = null;
 
       var eVersions = $("Versions");
       eVersions.innerHTML = "";
       var eColors = document.createElement("ul");
       eVersions.appendChild(eColors);
+
+      var boxToVersion = new Map();
 
       versions.forEach((version, i) => {
         var color = "rgba(" + Math.floor(255 * ( 1 - i / versions.length ) ) + ", 100, 100, 1)";
@@ -392,37 +400,23 @@
         eCheckBox.type = "checkbox";
         eCheckBox.checked = "checked";
         eSingleColor.appendChild(eCheckBox);
+        boxToVersion.set(eCheckBox, version);
 
         eCheckBox.addEventListener("change", (version => event => {
           if (updateDisplayTimeout) {
+            // Delay timeout by a few milliseconds
             window.clearTimeout(updateDisplayTimeout);
-          updateDisplayTimeout = null;
+            updateDisplayTimeout = null;
           }
-          if (!nextVersionsFilter) {
-            nextVersionsFilter = new Set();
-            for (var k of View._versionsFilter.keys()) {
-              nextVersionsFilter.add(k);
-            }
-          }
-          if (event.target.checked) {
-            nextVersionsFilter.add(version);
-          } else {
-            nextVersionsFilter.delete(version);
-          }
-
-
           updateDisplayTimeout = window.setTimeout(function() {
             updateDisplayTimeout = null;
-            var oldKeys = [...View._versionsFilter.keys()].sort();
-            var newKeys = [...nextVersionsFilter.keys()].sort();
-            console.log("Should we update display?", oldKeys, newKeys);
-
-            if (oldKeys.join() != newKeys.join()) {
-              console.log("Yes, we do");
-              schedule(displayWithFilter, nextVersionsFilter);
+            var filter = new Set();
+            for (var [k, v] of boxToVersion) {
+              if (k.checked) {
+                filter.add(v);
+              }
             }
-            View._versionsFilter = nextVersionsFilter;
-            nextVersionsFilter = null;
+            schedule(displayWithFilter, filter);
           }, 500);
 
         })(versions[i]));
@@ -692,7 +686,9 @@
   // Fetch data piece-wise
   (function() {
     const DAYS_BACK = 7;
+    const SAMPLE_SIZE = 200;
     var gDataByDay = [];
+    var gSampleByDay = [];
 
     var schedule = function(status, code) {
       if (schedule.current == null) {
@@ -705,128 +701,171 @@
       }, copy).then(v => Util.schedule(code, v));
     };
 
-    Util.loop(0,
-      age => age >= DAYS_BACK,
-      age => age + 1)( age => {
+    var latestRun = 0;
 
-      schedule("Getting sample for day " + age,
-        () => Server.getSampleForAge(age, 200));
+    var main = function(filters = undefined) {
+      Util.loop(0,
+        age => age >= DAYS_BACK,
+        age => age + 1)( age => {
+          var thisRun = latestRun++;
 
-        schedule("Normalizing sample", sample => {
-          console.log("Received a sample for the day", age, sample);
-          var normalized = Data.normalizeSample(sample);;
-          console.log("After rewriting", normalized);
-
-          return gDataByDay[age] = {
-            total: sample.total,
-            normalized: normalized
-          };
-        });
-
-        schedule("Extracting all versions involved", data => {
-          var versions = Data.getAllVersionsInvolved(data.normalized);
-          console.log("Versions involved", versions);
-
-          data.versions = versions;
-          return data;
-        });
-
-        schedule("Setting up colors", data => {
-          View.setupColors(data.versions);
-          return data;
-        });
-
-        schedule("Extracting all signatures", data => {
-          status("Getting all signatures");
-          var signatures = Data.getAllSignaturesInvolved(data.normalized);
-          console.log("Signatures involved", signatures);
-
-          var list = [[k, signatures[k]] for (k of Object.keys(signatures))];
-          list.sort((x, y) => x[1].length <= y[1].length);
-
-          var byKey = {};
-          for (var k of Object.keys(signatures)) {
-            byKey[k] = {all: signatures[k]};
-          }
-
-          data.signatures = {
-            byKey: byKey,
-            sorted: list
+          var next = function(...args) {
+            if (thisRun != latestRun) {
+              // Run has been cancelled
+              return null;
+            }
+            return schedule(...args);
           };
 
-          return data;
-        });
-
-        schedule("Showing signatures", data => {
-          console.log("Total", data.total);
-          console.log("Normalized", data.normalized.length);
-
-          var estimates = {};
-          var factor = data.total / data.normalized.length;
-          gDataByDay.forEach(oneDay => {
-            oneDay.signatures.sorted.forEach(kv => {
-              var [kind, signature] = kv;
-              if (!(kind in estimates)) {
-                estimates[kind] = 0;
-              }
-              estimates[kind] += signature.length * factor;
-            });
+          schedule("Getting sample for day " + age, () => {
+            if (gSampleByDay[age]) {
+              status("Getting sample from in-memory cache");
+              return gSampleByDay[age];
+            }
+            return Server.getSampleForAge(age, SAMPLE_SIZE);
           });
 
-          for (var [kind, signature] of data.signatures.sorted) {
-            console.log("Displaying signature", kind);
-            var display = View.prepareSignatureForDisplay(kind, DAYS_BACK);
-            console.log("Display");
-            display.eHits.textContent = "Crashes: " + Math.ceil(estimates[kind]) + " (est total for " + gDataByDay.length + " days)";
-          };
-          return data;
-        });
+          schedule("Storing sample",
+            sample => {
+              return gSampleByDay[age] = sample;
+            });
 
-        schedule("Updating histograms", data => {
-          var factor = data.total / data.normalized.length;
-          for (var [kind, signature] of data.signatures.sorted) {
-            // Counting instances per version
-            var byVersion = {};
-            var total = 0;
-            for (var hit of signature) {
-              var key = hit.product + " " + hit.version;
-              if (!(key in byVersion)) {
-              byVersion[key] = [];
+          schedule("Applying filters",
+            sample => {
+              if (!filters) {
+                return sample;
               }
-              byVersion[key].push(hit);
-              total++;
-            }
-            var sorted = [[k, byVersion[k]] for (k of Object.keys(byVersion))];
-            sorted.sort((x, y) => x[0] > y[0]);
+              var result = {};
+              for (var k of Object.keys(sample)) {
+                result[k] = sample[k];
+              }
+              result.hits = result.hits.filter(hit => filters.has(hit.product + " " + hit.version));
+              return result;
+          });
 
-            data.signatures.byKey[kind].byVersion = {
-              all: byVersion,
-              sorted: sorted,
-              total: total,
+          schedule("Normalizing sample", sample => {
+            console.log("Received a sample for the day", age, sample);
+            var normalized = Data.normalizeSample(sample);;
+            console.log("After rewriting", normalized);
+
+            return gDataByDay[age] = {
+              total: sample.total,
+              normalized: normalized
             };
-          }
-          View.updateAllHistograms(gDataByDay, factor);
-          return data;
+          });
+
+          schedule("Extracting all versions involved", data => {
+            var versions = Data.getAllVersionsInvolved(data.normalized);
+            console.log("Versions involved", versions);
+
+            data.versions = versions;
+            return data;
+          });
+
+          schedule("Setting up colors", data => {
+            if (!filters) {
+              View.setupColors(data.versions, main);
+            }
+            return data;
+          });
+
+          schedule("Extracting all signatures", data => {
+            status("Getting all signatures");
+            var signatures = Data.getAllSignaturesInvolved(data.normalized);
+            console.log("Signatures involved", signatures);
+
+            var list = [[k, signatures[k]] for (k of Object.keys(signatures))];
+            list.sort((x, y) => x[1].length <= y[1].length);
+
+            var byKey = {};
+            for (var k of Object.keys(signatures)) {
+              byKey[k] = {all: signatures[k]};
+            }
+
+            data.signatures = {
+              byKey: byKey,
+              sorted: list
+            };
+
+            return data;
+          });
+
+          schedule("Showing signatures", data => {
+            console.log("Total", data.total);
+            console.log("Normalized", data.normalized.length);
+
+            var estimates = {};
+            var factor = data.total / data.normalized.length;
+            gDataByDay.forEach(oneDay => {
+              oneDay.signatures.sorted.forEach(kv => {
+                var [kind, signature] = kv;
+                if (!(kind in estimates)) {
+                  estimates[kind] = 0;
+                }
+                estimates[kind] += signature.length * factor;
+              });
+            });
+
+            for (var [kind, signature] of data.signatures.sorted) {
+              console.log("Displaying signature", kind);
+              var display = View.prepareSignatureForDisplay(kind, DAYS_BACK);
+              console.log("Display");
+              display.eHits.textContent = "Crashes: " + Math.ceil(estimates[kind]) + " (total for " + gDataByDay.length + " days, estimated from a sample of " + SAMPLE_SIZE + " crashes per day)";
+            };
+            return data;
+          });
+
+          schedule("Updating histograms", data => {
+            var factor = data.total / data.normalized.length;
+            for (var [kind, signature] of data.signatures.sorted) {
+              // Counting instances per version
+              var byVersion = {};
+              var total = 0;
+              for (var hit of signature) {
+                var key = hit.product + " " + hit.version;
+                if (!(key in byVersion)) {
+                byVersion[key] = [];
+                }
+                byVersion[key].push(hit);
+                total++;
+              }
+              var sorted = [[k, byVersion[k]] for (k of Object.keys(byVersion))];
+              sorted.sort((x, y) => x[0] > y[0]);
+
+              data.signatures.byKey[kind].byVersion = {
+                all: byVersion,
+                sorted: sorted,
+                total: total,
+              };
+            }
+            View.updateAllHistograms(gDataByDay, factor);
+            return data;
+          });
+
+          schedule("Updating links", data => {
+            for (var [kind, signature] of data.signatures.sorted) {
+              View.showLinks(kind, age, signature);
+            }
+
+            return data;
+          });
+
+
+          return schedule("Done for the day", () => {
+            window.location.hash = window.location.hash;
+            $("Results").classList.remove("loading");
+            if (!filters) {
+              return new Promise(resolve => window.setTimeout(resolve, 1000));
+            } else {
+              return undefined;
+            }
+          });
+
+        }).then(() => {
+          status("Done");
         });
-
-        schedule("Updating links", data => {
-          for (var [kind, signature] of data.signatures.sorted) {
-            View.showLinks(kind, age, signature);
-          }
-
-          return data;
-        });
-
-
-        return schedule("Done", () => {
-          window.location.hash = window.location.hash;
-          $("Results").classList.remove("loading");
-          return new Promise(resolve => window.setTimeout(resolve, 1000));
-        });
-
-      });
-    // FIXME: Show links
-    // FIXME: Handle updates
+    };
+    main();
 
 
     return;
