@@ -95,6 +95,23 @@
           });
         })(init)
     ),
+
+    getSearchArgs: function() {
+      var search = window.location.search;
+      if (!search || search[0] != "?") {
+        return {};
+      }
+      var list = search.substring(1).split("&");
+      var result = {};
+      for (var item of list) {
+        var [before, after] = item.split("=");
+        if (!after) {
+          after = true;
+        }
+        result[before] = after;
+      }
+      return result;
+    },
   };
 
   var Server = {
@@ -224,8 +241,6 @@
       const DAYS_BACK = allDays.length;
       context.fillStyle = "white";
       context.fillRect(0, 0, WIDTH, HEIGHT);
-      console.log("Days back", DAYS_BACK);
-      console.log("updateHistogram", allDays);
 
       var rectangles = this._histogramRectangles.get(key);
       rectangles.length = 0;
@@ -233,7 +248,6 @@
       // Determine max
       var max = 0;
       allDays.forEach((byDay, i) => {
-        console.log("updateHistogram", key, byDay, i, "out of", DAYS_BACK);
         var byKey = byDay.signatures.byKey;
         if (!(key in byKey)) {
           // No such crash on that day
@@ -246,7 +260,6 @@
       });
       if (max == 0) {
         // Histogram is empty
-        console.log("Histogram", key, "is empty");
         return;
       }
 
@@ -264,12 +277,10 @@
         var byVersion = byKey[key].byVersion;
 
         byVersion.sorted.forEach((v, i) => {
-          console.log("Updating version", v, i);
           var [key, hits] = v;
           var height = hits.length * H;
           y0 = y0 - height;
           context.fillStyle = View._colors.get(key);
-          console.log("Rectangle", x0, y0, W, height);
           context.fillRect(x0, y0, W, height);
           rectangles.push([x0, y0, W, height, key + " (est. " + Math.ceil(hits.length * factor) + " crashes)"]);
         });
@@ -420,8 +431,6 @@
     // Grab the list of all versions involved
     _colors: new Map(),
     setupColors: function(versions, displayWithFilter) {
-      console.log("Initializing colors");
-
       var updateDisplayTimeout = null;
 
       var eVersions = $("Versions");
@@ -624,8 +633,6 @@
 
     // Group results by signature
     buildData: function(hits) {
-      console.log("Grouping hits");
-
       const now = Date.now();
       const MS_PER_DAY = 1000 * 3600 * 24;
 
@@ -672,7 +679,6 @@
         thatVersion.push(annotation);
       }
 
-      console.log("Map contains", map.size, "signatures");
       console.log([...map]);
       return {
         /**
@@ -695,7 +701,6 @@
         var byAge2 = [];
         var hits2 = 0;
         byAge.forEach((thatDay, i) => {
-          console.log("byAge", thatDay, i);
           if (!thatDay) {
             return;
           }
@@ -726,13 +731,16 @@
   var status = View.status;
 
 
-
   // Fetch data piece-wise
   (function() {
-    const DAYS_BACK = 7;
-    const SAMPLE_SIZE = 200;
     var gDataByDay = [];
     var gSampleByDay = [];
+
+    var args = Util.getSearchArgs();
+    console.log("Arguments", args);
+    const DAYS_BACK = args.days_back ? Number.parseInt(args.days_back) : 7;
+    const SAMPLE_SIZE = args.sample_size ? Number.parseInt(args.sample_size) : 200;
+
 
     var schedule = function(status, code) {
       if (schedule.current == null) {
@@ -793,9 +801,7 @@
           });
 
           schedule("Normalizing sample", sample => {
-            console.log("Received a sample for the day", age, sample);
             var normalized = Data.normalizeSample(sample);;
-            console.log("After rewriting", normalized);
 
             return gDataByDay[age] = {
               total: sample.total,
@@ -805,7 +811,6 @@
 
           schedule("Extracting all versions involved", data => {
             var versions = Data.getAllVersionsInvolved(data.normalized);
-            console.log("Versions involved", versions);
 
             data.versions = versions;
             return data;
@@ -821,7 +826,6 @@
           schedule("Extracting all signatures", data => {
             status("Getting all signatures");
             var signatures = Data.getAllSignaturesInvolved(data.normalized);
-            console.log("Signatures involved", signatures);
 
             var list = [[k, signatures[k]] for (k of Object.keys(signatures))];
             list.sort((x, y) => x[1].length <= y[1].length);
@@ -840,9 +844,6 @@
           });
 
           schedule("Showing signatures", data => {
-            console.log("Total", data.total);
-            console.log("Normalized", data.normalized.length);
-
             var estimates = {};
             var factor = data.total / data.normalized.length;
             gDataByDay.forEach(oneDay => {
@@ -856,9 +857,7 @@
             });
 
             for (var [kind, signature] of data.signatures.sorted) {
-              console.log("Displaying signature", kind);
               var display = View.prepareSignatureForDisplay(kind, DAYS_BACK);
-              console.log("Display");
               display.eHits.textContent = "Crashes: " + Math.ceil(estimates[kind]) + " (total for " + gDataByDay.length + " days, estimated from a sample of " + SAMPLE_SIZE + " crashes per day)";
             };
             return data;
