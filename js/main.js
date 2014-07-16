@@ -37,7 +37,21 @@
       );
     },
 
-    fetch: function(uri, delay, attempts, message) {
+    fetch: function(base, options, anchor, delay, attempts, message) {
+      var url = new URL(base);
+      if (!(Array.isArray(options))) {
+        options = [options];
+      }
+      for (var obj of options) {
+        for (var k of Object.keys(obj)) {
+          url.searchParams.set(k, obj[k]);
+        }
+      }
+      url.hash = anchor;
+      return this.rawFetch(url.href, delay, attempts, message);
+    },
+
+    rawFetch: function(uri, delay, attempts, message) {
       console.log("Attempting to fetch", uri, "with", attempts, "attempts remaining");
       if (!attempts) {
         return new Promise(resolve => "Too many attempts");
@@ -49,7 +63,7 @@
           console.log("Fetch", uri, "complete", xhr.status);
           if (xhr.status == 429) {
             var promise = Util.wait(delay, message);
-            promise = promise.then(() => Util.fetch(uri, delay * 2, attempts
+            promise = promise.then(() => Util.rawFetch(uri, delay * 2, attempts
                                              - 1, message));
             promise.then(resolve, reject);
             return;
@@ -96,6 +110,11 @@
         })(init)
     ),
 
+    /**
+     * Extract the "search" component of the URL of the page.
+     *
+     * @return {object} A key-value map.
+     */
     getSearchArgs: function() {
       var search = window.location.search;
       if (!search || search[0] != "?") {
@@ -114,13 +133,19 @@
     },
   };
 
+// ?async_shutdown_timeout=!__null__&_results_number=",
   var Server = {
     getCount: function() {
       status("Fetching size of sample");
-      var promise = Util.fetch(Server.BASE_URI + 1, 500, 10);
+      var promise = Util.fetch(Server.BASE_URI, {
+        async_shutdown_timeout: "!__null__",
+        _results_number: 1,
+      },
+      "", 500, 10);
       return promise.then(data => data.total);
     },
 
+/*
     getAllMatching: function(suffix, description, chunkSize = 100) {
       var promise = Util.fetch(Server.BASE_URI + 1 + suffix, 100, 10);
       promise = promise.then(data => {
@@ -148,6 +173,7 @@
       });
       return promise;
     },
+*/
 
     /**
      * Get a sample of data for a given day
@@ -165,12 +191,23 @@
       date.setDate(date.getDate() + 1);      
       var isoNextDay = date.toISOString().substring(0, 10);
 
-      return Util.fetch(Server.BASE_URI + sampleSize +
-        "&date=>=" + isoDay +
-        "&date=<" + isoNextDay,
-        100, 10);
+      return Util.fetch(Server.BASE_URI,
+        [
+          {
+            async_shutdown_timeout: "!__null__",
+            _results_number: sampleSize,
+          },
+          {
+            date: ">=" + isoDay
+          },
+          {
+            date: "<" + isoNextDay
+          }
+        ],
+        "", 1000, 5);
     },
 
+/*
     getBatch: function(start, number) {
       var txtRange = "items " + start + " to " +
         (start + number);
@@ -185,8 +222,8 @@
         status("Failed to fetch " + txtRange + ",  giving up");
       });
     },
-
-    BASE_URI: "https://crash-stats.mozilla.com/api/SuperSearch/?async_shutdown_timeout=!__null__&_results_number=",
+*/
+    BASE_URI: "https://crash-stats.mozilla.com/api/SuperSearch/",
 
   };
 
