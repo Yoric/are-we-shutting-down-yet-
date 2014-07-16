@@ -44,7 +44,7 @@
       }
       for (var obj of options) {
         for (var k of Object.keys(obj)) {
-          url.searchParams.set(k, obj[k]);
+          url.searchParams.append(k, obj[k]);
         }
       }
       url.hash = anchor;
@@ -131,9 +131,62 @@
       }
       return result;
     },
+
+    Filter: function() {
+      /**
+       * Map of product to set of version
+       */
+      this._byProduct = new Map();
+    },
+  };
+  Util.Filter.prototype = {
+    set: function(product, version, accept) {
+      console.log("Installing a filter", product, version, accept);
+      if (!product) {
+        throw new TypeError("Expected a product");
+      }
+      if (!version) {
+        throw new TypeError("Expected a version");
+      }
+      var thisProduct = this._byProduct.get(product);
+      if (!thisProduct) {
+        thisProduct = new Map();
+        this._byProduct.set(product, thisProduct);
+      }
+      thisProduct.set(version, accept);
+    },
+    get: function(product, version) {
+      if (!product) {
+        throw new TypeError("Expected a product");
+      }
+      if (!version) {
+        throw new TypeError("Expected a version");
+      }
+      var thisProduct = this._byProduct.get(product);
+      if (!thisProduct) {
+        return true;
+      }
+      return thisProduct.get(version);
+    },
+    _getAll: function(accept) {
+      var result = [];
+      for (var [kProduct, vProduct] of this._byProduct) {
+        for (var [kVersion, vVersion] of vProduct) {
+          if (vVersion == accept) {
+            result.push({product: kProduct, version: kVersion});
+          }
+        }
+      }
+      return result;
+    },
+    getRejects: function() {
+      return this._getAll(false);
+    },
+    getAccepts: function() {
+      return this._getAll(true);
+    },
   };
 
-// ?async_shutdown_timeout=!__null__&_results_number=",
   var Server = {
     getCount: function() {
       status("Fetching size of sample");
@@ -145,36 +198,6 @@
       return promise.then(data => data.total);
     },
 
-/*
-    getAllMatching: function(suffix, description, chunkSize = 100) {
-      var promise = Util.fetch(Server.BASE_URI + 1 + suffix, 100, 10);
-      promise = promise.then(data => {
-        var total = data.total;
-        var buffer = [];
-        return Util.loop(0,
-                         x => x * chunkSize > total,
-                         x => x + 1)(i => {
-          status("Fetching items " + (i * chunkSize) + "-" +
-                 ( (i + 1) * chunkSize ) + "/" +
-                 total + " for " + description);
-          var promise = Util.fetch(Server.BASE_URI + chunkSize +
-                                   "&_results_offset=" + i *
-                                   chunkSize,
-                                   100, 10);
-          promise = promise.then(batch => {
-            status("Obtained items " + (i * chunkSize) + "-" +
-                   ( (i + 1) * chunkSize ) + "/" +
-                   total + " for " + description);
-            buffer.push(batch);
-            return buffer;
-          });
-          return promise;
-        });
-      });
-      return promise;
-    },
-*/
-
     /**
      * Get a sample of data for a given day
      *
@@ -183,7 +206,7 @@
      *
      * @return {array} An array of payloads
      */
-    getSampleForAge: function(daysAgo, sampleSize = 100) {
+    getSampleForAge: function(daysAgo, filter, sampleSize = 100) {
       var date = new Date();
       date.setDate(date.getDate() - daysAgo);
       var isoDay = date.toISOString().substring(0, 10);
@@ -191,38 +214,28 @@
       date.setDate(date.getDate() + 1);      
       var isoNextDay = date.toISOString().substring(0, 10);
 
-      return Util.fetch(Server.BASE_URI,
-        [
-          {
-            async_shutdown_timeout: "!__null__",
-            _results_number: sampleSize,
-          },
-          {
-            date: ">=" + isoDay
-          },
-          {
-            date: "<" + isoNextDay
-          }
-        ],
-        "", 1000, 5);
+      var options = [
+        {
+          async_shutdown_timeout: "!__null__",
+          _results_number: sampleSize,
+        },
+        {
+          date: ">=" + isoDay
+        },
+        {
+          date: "<" + isoNextDay
+        }
+      ];
+
+      if (filter) {
+        for (var {version} of filter.getAccepts()) {
+          options.push({version: version}); // Versions are OR-ed
+        }
+      }
+
+      return Util.fetch(Server.BASE_URI, options, "", 1000, 5);
     },
 
-/*
-    getBatch: function(start, number) {
-      var txtRange = "items " + start + " to " +
-        (start + number);
-      status("Fetching " + txtRange);
-      var promise = Util.fetch(Server.BASE_URI + number + "&_results_offset=" +
-                          start, start, 10, "(fetching " + txtRange + ")");
-      return promise.then(data => {
-        status("Received " + txtRange);
-        return data;
-      },
-      () => {
-        status("Failed to fetch " + txtRange + ",  giving up");
-      });
-    },
-*/
     BASE_URI: "https://crash-stats.mozilla.com/api/SuperSearch/",
 
   };
@@ -373,54 +386,72 @@
       }
     },
 
-    showLinks: function(kind, age, signature) {
+    updateAllLinks: function(allData) {
       const MAX_LINKS_PER_DAY = 20;
-      var eLinks = this._elements.get(kind).eLinks;
-      var title = age + " days ago ";
 
-      var eSingleDay;
-      var children = [...eLinks.children];
-      eSingleDay = children.find(x => x.textContent == title);
-      if (eSingleDay) {
-        eSingleDay.innerHTML = "";
-      } else {
-        eSingleDay = document.createElement("li");
-        eSingleDay.textContent = title;
-      }
-      eLinks.appendChild(eSingleDay);
+      allData.forEach((oneDay, age) => {
+        var title = age + " days ago ";
 
-      var eDayLinks = document.createElement("ul");
-      eSingleDay.appendChild(eDayLinks);
+        oneDay.signatures.sorted.forEach(kv => {
+          var [kind, signature] = kv;
 
-      var linksInDay = 0;
-      var ENOUGH = new Error("Enough samples, bailing out");
-      try {
-        signature.forEach(hit => {
-          var eSampleLi = document.createElement("li");
-          eDayLinks.appendChild(eSampleLi);
+          var eLinks = this._elements.get(kind).eLinks;
+          var children = [...eLinks.children];
 
-          if (linksInDay++ >= MAX_LINKS_PER_DAY) {
-            eSampleLi.textContent = "[...] (omitted " +
-              (signature.length - MAX_LINKS_PER_DAY) + ")";
-            throw ENOUGH;
+          var eSingleDay;
+          eSingleDay = children.find(x => x.getAttribute("_dashboard_ago") == "" + age);
+          if (signature.length > 0) {
+            console.log("We have links for", kind, age, signature);
+            if (eSingleDay) {
+              eSingleDay.innerHTML = "";
+            } else {
+              eSingleDay = document.createElement("li");
+              eSingleDay.setAttribute("_dashboard_ago", age);
+            }
+          } else {
+            console.log("NO links for", kind, age, signature);
+            if (eSingleDay) {
+              eLinks.removeChild(eSingleDay);
+            }
+            return;
           }
+          eSingleDay.textContent = title;
+          eLinks.appendChild(eSingleDay);
+
+          var eDayLinks = document.createElement("ul");
+          eSingleDay.appendChild(eDayLinks);
+
+          var linksInDay = 0;
+          var ENOUGH = new Error("Enough samples, bailing out");
+          try {
+            signature.forEach(hit => {
+              var eSampleLi = document.createElement("li");
+              eDayLinks.appendChild(eSampleLi);
+
+              if (linksInDay++ >= MAX_LINKS_PER_DAY) {
+                eSampleLi.textContent = "[...] (omitted " +
+                  (signature.length - MAX_LINKS_PER_DAY) + ")";
+                throw ENOUGH;
+            }
 
 
-          var eLink = document.createElement("a");
-          eSampleLi.appendChild(eLink);
-          eLink.href = "https://crash-stats.mozilla.com/report/index/" + hit.uuid;
-          var version = hit.product + " " + hit.version;
-          if (hit.release_channel == "nightly") {
-            version += " " + hit.build_id;
+              var eLink = document.createElement("a");
+              eSampleLi.appendChild(eLink);
+              eLink.href = "https://crash-stats.mozilla.com/report/index/" + hit.uuid;
+              var version = hit.product + " " + hit.version;
+              if (hit.release_channel == "nightly") {
+                version += " " + hit.build_id;
+              }
+              eLink.textContent = hit.uuid + " (" +  version + ")";
+
+
+              eSampleLi.title = JSON.stringify(hit.annotation, null, "\t");
+            });
+          } catch (ex if ex == ENOUGH) {
+            // Ok, we just bailed out
           }
-          eLink.textContent = hit.uuid + " (" +  version + ")";
-
-
-          eSampleLi.title = JSON.stringify(hit.annotation, null, "\t");
         });
-      } catch (ex if ex == ENOUGH) {
-        // Ok, we just bailed out
-      }
+      });
     },
 
     showStacks: function(crash, eStacks) {
@@ -477,39 +508,45 @@
 
       var boxToVersion = new Map();
 
-      versions.forEach((version, i) => {
+      versions.forEach((v, i) => {
+        var {product, version} = v;
+        var description = product + " " + version;
         var color = "rgba(" + Math.floor(255 * ( 1 - i / versions.length ) ) + ", 100, 100, 1)";
-        View._colors.set(version, color);
+        View._colors.set(description, color);
 
         var eSingleColor = document.createElement("li");
         eColors.appendChild(eSingleColor);
-        eSingleColor.textContent = version;
+        eSingleColor.textContent = description;
         eSingleColor.style.color = color;
 
         var eCheckBox = document.createElement("input");
         eCheckBox.type = "checkbox";
         eCheckBox.checked = "checked";
         eSingleColor.appendChild(eCheckBox);
-        boxToVersion.set(eCheckBox, version);
+        boxToVersion.set(eCheckBox, v);
 
-        eCheckBox.addEventListener("change", (version => event => {
+        eCheckBox.addEventListener("change", (v => event => {
+          console.log("setupColors", "onchange", v);
           if (updateDisplayTimeout) {
             // Delay timeout by a few milliseconds
             window.clearTimeout(updateDisplayTimeout);
             updateDisplayTimeout = null;
           }
           updateDisplayTimeout = window.setTimeout(function() {
-            updateDisplayTimeout = null;
-            var filter = new Set();
-            for (var [k, v] of boxToVersion) {
-              if (k.checked) {
-                filter.add(v);
+            schedule(() => {
+              console.log("setupColors", "User requested a display update");
+              updateDisplayTimeout = null;
+              var filter = new Util.Filter();
+              for (var [box, {product, version}] of boxToVersion) {
+                console.log("setupColors", "adding to filter", product, version, box.checked);
+                filter.set(product, version, box.checked);
               }
-            }
-            schedule(displayWithFilter, filter);
+              console.log("setupColors", "has finished building the filter");
+              schedule(displayWithFilter, filter);
+            });
           }, 500);
 
-        })(versions[i]));
+        })(v));
       });
     },
 
@@ -569,54 +606,6 @@
       this._elements.set(key, elements);
       return elements;
     },
-
-    showEverything: function(sorted, eResults) {
-      eResults.innerHTML = "";
-      for (var crash of sorted) {
-        console.log("Crash", crash);
-        var eCrash = document.createElement("div");
-        eCrash.classList.add("crash");
-        eResults.appendChild(eCrash);
-
-        var eHeader = document.createElement("div");
-        eHeader.classList.add("header");
-        eCrash.appendChild(eHeader);
-
-        // Show signature and number of hits
-        var eSignature = document.createElement("a");
-        eSignature.classList.add("signature");
-        eSignature.textContent = crash.name;
-        eSignature.name = crash.name;
-        eSignature.href = "#" + crash.name;
-        eHeader.appendChild(eSignature);
-
-        var eHits = document.createElement("span");
-        eHits.classList.add("hits");
-        eHits.textContent = crash.hits + " crashes";
-        eHeader.appendChild(eHits);
-
-        // Show histogram
-        var eStatistics = document.createElement("div");
-        eStatistics.classList.add("statistics");
-        eCrash.appendChild(eStatistics);
-        schedule(View.showHistogram, crash, eStatistics);
-
-
-        // Show links
-        var eLinks = document.createElement("ul");
-        eLinks.classList.add("links");
-        eCrash.appendChild(eLinks);
-        schedule(View.showLinks, crash, eLinks);
-
-        // Show stacks
-        var eStacks = document.createElement("div");
-        eStacks.classList.add("stacks");
-        eCrash.appendChild(eStacks);
-        schedule(View.showStacks, crash, eStacks);
-      }
-      eResults.classList.remove("loading");
-    },
-
   };
 
   var Data = {
@@ -647,11 +636,21 @@
     },
 
     getAllVersionsInvolved: function(normalized) {
-      var versions = {};
+      var byProduct = {};
       for (var hit of normalized) {
-        versions[hit.product + " " + hit.version] = true;
+        if (!(hit.product in byProduct)) {
+          byProduct[hit.product] = {};
+        }
+        byProduct[hit.product][hit.version] = true;
       }
-      return Object.keys(versions).sort();
+      var list = [];
+      for (var product of Object.keys(byProduct).sort()) {
+        for (var version of Object.keys(byProduct[product])) {
+          list.push({product: product, version: version});
+        }
+      }
+      console.log("All versions involved", list);
+      return list;
     },
 
     getAllSignaturesInvolved: function(normalized) {
@@ -729,37 +728,6 @@
         map: map,
       };
     },
-
-    // Sort by number of hits
-    sortHits: function(data, filter) {
-      var list = [];
-      for (var [k, {all, byAge}] of data.map) {
-        var all2 = [];
-        var byAge2 = [];
-        var hits2 = 0;
-        byAge.forEach((thatDay, i) => {
-          if (!thatDay) {
-            return;
-          }
-          var thatDay2 = { hits: 0, all: [], byVersion: {} };
-          for (var version of Object.keys(thatDay.byVersion)) {
-            if (filter.has(version)) {
-              var thatVersion = thatDay.byVersion[version];
-              thatDay2.byVersion[version] = thatVersion;
-              thatDay2.hits += thatVersion.length;
-              thatDay2.all.push(...thatVersion);
-              all2.push(...thatVersion);
-            }
-          }
-          if (thatDay2.hits) {
-            hits2 += thatDay2.hits;
-            byAge2[i] = thatDay2;
-          }
-        });
-        list.push({name: k, data: {all: all2, byAge: byAge2}, hits: hits2});
-      }
-      return list.sort((a, b) => a.hits <= b.hits);
-    },
   };
 
   // A few shortcuts
@@ -798,7 +766,7 @@
      * If the data has already been fetched, use the in-memory cache.
      */
     var main = function(filters = undefined) {
-      Util.loop(0,
+      return Util.loop(0,
         age => age >= DAYS_BACK,
         age => age + 1)( age => {
           var thisRun = latestRun++;
@@ -816,7 +784,7 @@
               status("Getting sample from in-memory cache");
               return gSampleByDay[age];
             }
-            return Server.getSampleForAge(age, SAMPLE_SIZE);
+            return Server.getSampleForAge(age, filters, SAMPLE_SIZE);
           });
 
           schedule("Storing sample",
@@ -827,19 +795,21 @@
           schedule("Applying filters",
             sample => {
               if (!filters) {
+                status("No filters");
                 return sample;
               }
+              console.log("We need to filter out some stuff");
               var result = {};
               for (var k of Object.keys(sample)) {
                 result[k] = sample[k];
               }
-              result.hits = result.hits.filter(hit => filters.has(hit.product + " " + hit.version));
+              result.hits = result.hits.filter(hit => filters.get(hit.product, hit.version));
               return result;
           });
 
           schedule("Normalizing sample", sample => {
             var normalized = Data.normalizeSample(sample);;
-
+            console.log("Normalied data", normalized);
             return gDataByDay[age] = {
               total: sample.total,
               normalized: normalized
@@ -849,13 +819,22 @@
           schedule("Extracting all versions involved", data => {
             var versions = Data.getAllVersionsInvolved(data.normalized);
 
-            data.versions = versions;
+            data.versions = versions; // List of {product, version}
             return data;
           });
 
           schedule("Setting up colors", data => {
             if (!filters) {
-              View.setupColors(data.versions, main);
+              View.setupColors(data.versions, filters => {
+                console.log("Applying quick filters");
+                var promise = main(filters);
+                promise = promise.then(() => {
+                  console.log("Now clearing cache and restarting with the full filters");
+                  gDataByDay.length = 0;
+                  gSampleByDay.length = 0;
+                  return main(filters);
+                });
+              });
             }
             return data;
           });
@@ -930,10 +909,12 @@
           });
 
           schedule("Updating links", data => {
+            View.updateAllLinks(gDataByDay, age);
+/*
             for (var [kind, signature] of data.signatures.sorted) {
               View.showLinks(kind, age, signature);
             }
-
+*/
             return data;
           });
 
