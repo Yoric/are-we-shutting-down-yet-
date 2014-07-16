@@ -68,3 +68,7 @@ a:hover {
     left:0;
     text-align: right;
 }
+
+.hidden {
+    visibility: hidden;
+}

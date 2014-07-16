@@ -62,6 +62,7 @@
         xhr.addEventListener("load", function(event) {
           console.log("Fetch", uri, "complete", xhr.status);
           if (xhr.status == 429) {
+            status("Server rejected request, we will need to wait");
             var promise = Util.wait(delay, message);
             promise = promise.then(() => Util.rawFetch(uri, delay * 2, attempts
                                              - 1, message));
@@ -109,28 +110,6 @@
           });
         })(init)
     ),
-
-    /**
-     * Extract the "search" component of the URL of the page.
-     *
-     * @return {object} A key-value map.
-     */
-    getSearchArgs: function() {
-      var search = window.location.search;
-      if (!search || search[0] != "?") {
-        return {};
-      }
-      var list = search.substring(1).split("&");
-      var result = {};
-      for (var item of list) {
-        var [before, after] = item.split("=");
-        if (!after) {
-          after = true;
-        }
-        result[before] = after;
-      }
-      return result;
-    },
 
     Filter: function() {
       /**
@@ -497,8 +476,13 @@
     },
 
     // Grab the list of all versions involved
-    _colors: new Map(),
+    _colors: null,
     setupColors: function(versions, displayWithFilter) {
+      if (this._colors) {
+        return; // Nothing to do
+      }
+      this._colors = new Map();
+
       var updateDisplayTimeout = null;
 
       var eVersions = $("Versions");
@@ -508,6 +492,8 @@
 
       var boxToVersion = new Map();
 
+      var filterArgs = new URL(window.location).searchParams.getAll("version");
+      console.log("setupColors", "filterArgs", filterArgs);
       versions.forEach((v, i) => {
         var {product, version} = v;
         var description = product + " " + version;
@@ -521,32 +507,60 @@
 
         var eCheckBox = document.createElement("input");
         eCheckBox.type = "checkbox";
-        eCheckBox.checked = "checked";
         eSingleColor.appendChild(eCheckBox);
         boxToVersion.set(eCheckBox, v);
 
+        if (filterArgs.length == 0 || filterArgs.some(x => {
+            console.log("setupColors", "comparing", x, description);
+            return x == description;
+        })) {
+          eCheckBox.checked = "checked";
+        }
+
         eCheckBox.addEventListener("change", (v => event => {
-          console.log("setupColors", "onchange", v);
           if (updateDisplayTimeout) {
             // Delay timeout by a few milliseconds
             window.clearTimeout(updateDisplayTimeout);
             updateDisplayTimeout = null;
           }
           updateDisplayTimeout = window.setTimeout(function() {
-            schedule(() => {
+            Util.schedule(() => {
               console.log("setupColors", "User requested a display update");
               updateDisplayTimeout = null;
               var filter = new Util.Filter();
+              var newURL = new URL(window.location);
+              var newArgs = newURL.searchParams;
+              newArgs.delete("version");
+
               for (var [box, {product, version}] of boxToVersion) {
                 console.log("setupColors", "adding to filter", product, version, box.checked);
                 filter.set(product, version, box.checked);
+                if (box.checked) {
+                  newArgs.append("version", product + " " + version);
+                }
               }
-              console.log("setupColors", "has finished building the filter");
-              schedule(displayWithFilter, filter);
+
+              var eGoto = $("Goto");
+              eGoto.href = newURL;
+              eGoto.classList.remove("hidden");
+              Util.schedule(displayWithFilter, filter);
             });
           }, 500);
 
         })(v));
+      });
+
+      var eClearLi = document.createElement("li");
+      eVersions.appendChild(eClearLi);
+
+      var eClearButton = document.createElement("input");
+      eClearButton.type = "button";
+      eClearButton.value = "clear filters";
+      eClearLi.appendChild(eClearButton);
+      eClearButton.addEventListener("click", event => {
+        for (var box of boxToVersion.keys()) {
+          box.checked = true;
+        }
       });
     },
 
@@ -732,7 +746,6 @@
 
   // A few shortcuts
   var $ = id => document.getElementById(id);
-  var schedule = Util.schedule;
   var status = View.status;
 
 
@@ -740,12 +753,22 @@
   (function() {
     var gDataByDay = [];
     var gSampleByDay = [];
+    var gArgs = new URL(window.location).searchParams;
 
-    var args = Util.getSearchArgs();
-    console.log("Arguments", args);
-    const DAYS_BACK = args.days_back ? Number.parseInt(args.days_back) : 7;
-    const SAMPLE_SIZE = args.sample_size ? Number.parseInt(args.sample_size) : 200;
+    const DAYS_BACK = gArgs.has("days_back") ? Number.parseInt(gArgs.get("days_back")) : 7;
+    const SAMPLE_SIZE = gArgs.has("sample_size") ? Number.parseInt(gArgs.get("sample_size")) : 200;
 
+    var gFilters = null;
+    if (gArgs.getAll("version").length) {
+      console.log("Creating filters");
+      gFilters = new Util.Filter();
+      gArgs.getAll("version").forEach(v => {
+        var [product, version] = v.split(" ");
+        if (product && version) {
+          gFilters.set(product, version, true);
+        }
+      });
+    }
 
     var schedule = function(status, code) {
       if (schedule.current == null) {
@@ -765,7 +788,7 @@
      *
      * If the data has already been fetched, use the in-memory cache.
      */
-    var main = function(filters = undefined) {
+    var main = function(filters = gFilters) {
       return Util.loop(0,
         age => age >= DAYS_BACK,
         age => age + 1)( age => {
@@ -824,18 +847,7 @@
           });
 
           schedule("Setting up colors", data => {
-            if (!filters) {
-              View.setupColors(data.versions, filters => {
-                console.log("Applying quick filters");
-                var promise = main(filters);
-                promise = promise.then(() => {
-                  console.log("Now clearing cache and restarting with the full filters");
-                  gDataByDay.length = 0;
-                  gSampleByDay.length = 0;
-                  return main(filters);
-                });
-              });
-            }
+            View.setupColors(data.versions, main);
             return data;
           });
 
@@ -910,11 +922,6 @@
 
           schedule("Updating links", data => {
             View.updateAllLinks(gDataByDay, age);
-/*
-            for (var [kind, signature] of data.signatures.sorted) {
-              View.showLinks(kind, age, signature);
-            }
-*/
             return data;
           });
 
