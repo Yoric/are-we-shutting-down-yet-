@@ -878,7 +878,7 @@
               var display = View.prepareSignatureForDisplay(kind, DAYS_BACK);
               display.eHits.textContent = "Crashes: " + 
                 Math.ceil((estimates[kind] * 100) / (SAMPLE_SIZE * gDataByDay.length)) +
-                "% (~" + Math.ceil(estimates[kind] * factor) + " for " + gDataByDay.length + " days, estimated from a sample of " + SAMPLE_SIZE + " crashes per day)";
+                "% of " + (SAMPLE_SIZE * gDataByDay.length) + " samples (~" + Math.ceil(estimates[kind] * factor) + " total crashes over " + gDataByDay.length + " days)";
             };
             return data;
           });
