@@ -552,16 +552,6 @@
 
       var eClearLi = document.createElement("li");
       eVersions.appendChild(eClearLi);
-
-      var eClearButton = document.createElement("input");
-      eClearButton.type = "button";
-      eClearButton.value = "clear filters";
-      eClearLi.appendChild(eClearButton);
-      eClearButton.addEventListener("click", event => {
-        for (var box of boxToVersion.keys()) {
-          box.checked = true;
-        }
-      });
     },
 
 
