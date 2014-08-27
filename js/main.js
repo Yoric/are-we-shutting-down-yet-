@@ -185,7 +185,7 @@
      *
      * @return {array} An array of payloads
      */
-    getSampleForAge: function(daysAgo, filter, sampleSize = 100) {
+    getSampleForAge: function(daysAgo, restrict, sampleSize = 100) {
       var date = new Date();
       date.setDate(date.getDate() - daysAgo);
       var isoDay = date.toISOString().substring(0, 10);
@@ -206,16 +206,34 @@
         }
       ];
 
-      if (filter) {
-        for (var {version} of filter.getAccepts()) {
-          options.push({version: version}); // Versions are OR-ed
+
+      restrict.versions.forEach(v => {
+        var [product, version] = v.split(" ");
+        if (product && version) {
+          options.push({version: version}); // Versions are OR-ed by the server
         }
-      }
+      });
+
+      restrict.signatures.forEach(sig => {
+        var operator, content;
+        if (!sig) {
+          return;
+        }
+        if (sig.startsWith("~!")) {
+          throw new Error("Negative matches are not supported yet (by the server?)");
+        } else if (sig.startsWith("~")) {
+          operator = "";
+          content = sig.substring(1);
+        } else {
+          throw new Error("Operator not supported: " + sig);
+        }
+        options.push({async_shutdown_timeout: operator + content});
+      });
 
       return Util.fetch(Server.BASE_URI, options, "", 1000, 5);
     },
 
-    BASE_URI: "https://crash-stats.mozilla.com/api/SuperSearch/",
+    BASE_URI: "https://crash-stats.allizom.org/api/SuperSearch/",
 
   };
 
@@ -588,6 +606,37 @@
       eHeader.appendChild(eHits);
       elements.eHits = eHits;
 
+      var eRefineDiv = document.createElement("div");
+      eRefineDiv.textContent = "Refine data: ";
+      eHeader.appendChild(eRefineDiv);
+
+      var eRefineOnly = document.createElement("a");
+      eRefineOnly.textContent = "only this signature";
+      eRefineOnly.classList.add("resample");
+      eRefineDiv.appendChild(eRefineOnly);
+      elements.eRefineOnly = eRefineOnly;
+
+      var urlOnly = new URL(window.location);
+      key.split(" | ").forEach(sig => {
+        urlOnly.searchParams.append("signature", "~" + sig);
+      });
+      eRefineOnly.href = urlOnly;
+
+/*
+      eRefineDiv.appendChild(document.createTextNode(" / "));
+
+      var eRefineExclude = document.createElement("a");
+      eRefineExclude.textContent = "exclude this signature";
+      eRefineExclude.classList.add("resample");
+      eRefineDiv.appendChild(eRefineExclude);
+      elements.eRefineExclude = eRefineExclude;
+
+      var urlExclude = new URL(window.location);
+      key.split(" | ").forEach(sig => {
+        urlExclude.searchParams.append("signature", "~!" + sig);
+      });
+      eRefineExclude.href = urlExclude;
+*/
       // Show histogram
       var eStatistics = document.createElement("div");
       eStatistics.classList.add("statistics");
@@ -620,7 +669,12 @@
           result[k] = hit[k];
         }
         result.date = Date.parse(hit.date);
-        result.annotation = JSON.parse(hit.async_shutdown_timeout);
+        try {
+          result.annotation = JSON.parse(hit.async_shutdown_timeout);
+        } catch (ex if ex instanceof SyntaxError) {
+          ex.json = hit.async_shutdown_timeout;
+          throw ex;
+        }
         result.annotation.conditions.forEach((condition, i) => {
           if (typeof condition == "string") {
             // Deal with older format
@@ -748,17 +802,10 @@
     const DAYS_BACK = gArgs.has("days_back") ? Number.parseInt(gArgs.get("days_back")) : 7;
     const SAMPLE_SIZE = gArgs.has("sample_size") ? Number.parseInt(gArgs.get("sample_size")) : 200;
 
-    var gFilters = null;
-    if (gArgs.getAll("version").length) {
-      console.log("Creating filters");
-      gFilters = new Util.Filter();
-      gArgs.getAll("version").forEach(v => {
-        var [product, version] = v.split(" ");
-        if (product && version) {
-          gFilters.set(product, version, true);
-        }
-      });
-    }
+    var gRestrict = {
+      versions: gArgs.getAll("version"),
+      signatures: gArgs.getAll("signature"),
+    };
 
     var schedule = function(status, code) {
       if (schedule.current == null) {
@@ -778,7 +825,7 @@
      *
      * If the data has already been fetched, use the in-memory cache.
      */
-    var main = function(filters = gFilters) {
+    var main = function(filters = undefined) {
       return Util.loop(0,
         age => age >= DAYS_BACK,
         age => age + 1)( age => {
@@ -797,7 +844,7 @@
               status("Getting sample from in-memory cache");
               return gSampleByDay[age];
             }
-            return Server.getSampleForAge(age, filters, SAMPLE_SIZE);
+            return Server.getSampleForAge(age, gRestrict, SAMPLE_SIZE);
           });
 
           schedule("Storing sample",
@@ -822,7 +869,7 @@
 
           schedule("Normalizing sample", sample => {
             var normalized = Data.normalizeSample(sample);;
-            console.log("Normalied data", normalized);
+            console.log("Normalized data", normalized, sample.total);
             return gDataByDay[age] = {
               total: sample.total,
               normalized: normalized
@@ -864,6 +911,8 @@
           schedule("Showing signatures", data => {
             var estimates = {};
             var factor = data.total / data.normalized.length;
+            var sampleSize = 0;
+            var totalHits = 0;
             gDataByDay.forEach(oneDay => {
               oneDay.signatures.sorted.forEach(kv => {
                 var [kind, signature] = kv;
@@ -871,14 +920,17 @@
                   estimates[kind] = 0;
                 }
                 estimates[kind] += signature.length;
+                sampleSize += signature.length;
               });
+              totalHits += oneDay.total;
             });
 
+            console.log("Total sample size", sampleSize);
             for (var [kind, signature] of data.signatures.sorted) {
               var display = View.prepareSignatureForDisplay(kind, DAYS_BACK);
               display.eHits.textContent = "Crashes: " + 
-                Math.ceil((estimates[kind] * 100) / (SAMPLE_SIZE * gDataByDay.length)) +
-                "% of " + (SAMPLE_SIZE * gDataByDay.length) + " samples (~" + Math.ceil(estimates[kind] * factor) + " total crashes over " + gDataByDay.length + " days)";
+                Math.ceil((estimates[kind] * 100) / sampleSize) +
+                "% of " + sampleSize + " samples (~" + Math.ceil(estimates[kind] * factor) + " total crashes over " + gDataByDay.length + " days)";
             };
             return data;
           });
