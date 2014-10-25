@@ -320,11 +320,11 @@
       var max = 0;
       allDays.forEach((byDay, i) => {
         var byKey = byDay.signatures.byKey;
-        if (!(key in byKey)) {
+        if (!byKey.has(key)) {
           // No such crash on that day
           return;
         }
-        var byVersion = byKey[key].byVersion;
+        var byVersion = byKey.get(key).byVersion;
         if (byVersion.total > max) {
           max = byVersion.total;
         }
@@ -341,11 +341,11 @@
         var x0 = WIDTH - W * (age + 1);
         var y0 = HEIGHT;
         var byKey = byDay.signatures.byKey;
-        if (!(key in byKey)) {
+        if (!byKey.has(key)) {
           // No such crash on that day
           return;
         }
-        var byVersion = byKey[key].byVersion;
+        var byVersion = byKey.get(key).byVersion;
 
         byVersion.sorted.forEach((v, i) => {
           var [key, hits] = v;
@@ -868,9 +868,9 @@
       this.sorted = [];
 
       /**
-       * @type {ObjectMap<SignaturesByKey>}
+       * @type {Map<string, SignaturesByKey>} // FIXME: Changing
        */
-      this.byKey = {};
+      this.byKey = new Map();
     }
 
     /**
@@ -1023,11 +1023,11 @@
             var list = [[k, signatures[k]] for (k of Object.keys(signatures))];
             list.sort((x, y) => x[1].length <= y[1].length);
 
-            var byKey = {};
+            var byKey = new Map();
             for (var k of Object.keys(signatures)) {
-              byKey[k] = Util.strict({
+              byKey.set(k, Util.strict({
                 all: signatures[k],
-              });
+              }));
             }
 
             data.signatures = Util.strict({
@@ -1082,7 +1082,7 @@
               var sorted = [[k, byVersion[k]] for (k of Object.keys(byVersion))];
               sorted.sort((x, y) => x[0] > y[0]);
 
-              data.signatures.byKey[kind].byVersion = Util.strict({
+              data.signatures.byKey.get(kind).byVersion = Util.strict({
                 all: byVersion,
                 sorted: sorted,
                 total: total,
