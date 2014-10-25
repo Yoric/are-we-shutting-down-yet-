@@ -117,6 +117,27 @@
        */
       this._byProduct = new Map();
     },
+
+    /**
+     * Strict object.
+     */
+    strict: function(obj = {}) {
+      return new Proxy(obj, {
+        get: function(target, name) {
+          if (name in target) {
+            return target[name];
+          }
+          if (name == "then") {
+            // Special case, see bug 1089128
+            return undefined;
+          }
+          var error = new Error("No such key: '" + name + "', expected one of " + JSON.stringify(Object.keys(target)));
+          console.error("No such key", name, target, error.stack);
+          throw error;
+        },
+      });
+    }
+
   };
   Util.Filter.prototype = {
     set: function(product, version, accept) {
@@ -859,7 +880,7 @@
                 return sample;
               }
               console.log("We need to filter out some stuff");
-              var result = {};
+              var result = Util.strict({});
               for (var k of Object.keys(sample)) {
                 result[k] = sample[k];
               }
@@ -868,12 +889,12 @@
           });
 
           schedule("Normalizing sample", sample => {
-            var normalized = Data.normalizeSample(sample);;
+            var normalized = Data.normalizeSample(sample);
             console.log("Normalized data", normalized, sample.total);
-            return gDataByDay[age] = {
+            return gDataByDay[age] = Util.strict({
               total: sample.total,
-              normalized: normalized
-            };
+              normalized: normalized,
+            });
           });
 
           schedule("Extracting all versions involved", data => {
@@ -897,13 +918,15 @@
 
             var byKey = {};
             for (var k of Object.keys(signatures)) {
-              byKey[k] = {all: signatures[k]};
+              byKey[k] = Util.strict({
+                  all: signatures[k],
+              });
             }
 
-            data.signatures = {
+            data.signatures = Util.strict({
               byKey: byKey,
-              sorted: list
-            };
+              sorted: list,
+            });
 
             return data;
           });
@@ -939,12 +962,12 @@
             var factor = data.total / data.normalized.length;
             for (var [kind, signature] of data.signatures.sorted) {
               // Counting instances per version
-              var byVersion = {};
+              var byVersion = Util.strict({});
               var total = 0;
               for (var hit of signature) {
                 var key = hit.product + " " + hit.version;
                 if (!(key in byVersion)) {
-                byVersion[key] = [];
+                  byVersion[key] = [];
                 }
                 byVersion[key].push(hit);
                 total++;
@@ -952,11 +975,11 @@
               var sorted = [[k, byVersion[k]] for (k of Object.keys(byVersion))];
               sorted.sort((x, y) => x[0] > y[0]);
 
-              data.signatures.byKey[kind].byVersion = {
+              data.signatures.byKey[kind].byVersion = Util.strict({
                 all: byVersion,
                 sorted: sorted,
                 total: total,
-              };
+              });
             }
             View.updateAllHistograms(gDataByDay, factor);
             return data;
