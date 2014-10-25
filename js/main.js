@@ -789,9 +789,10 @@
         thatDay.hits++;
 
         // Group by version
-        var thatVersion = thatDay.byVersion[hit.version];
+        var thatVersion = thatDay.byVersion.get(hit.version);
         if (!thatVersion) {
-          thatDay.byVersion[hit.version] = thatVersion = [];
+          thatVersion = [];
+          thatDay.byVersion.set(hit.version, thatVersion);
         }
         thatDay.all.push(annotation);
         thatVersion.push(annotation);
@@ -1069,21 +1070,20 @@
             var factor = data.total / data.normalized.length;
             for (var [kind, signature] of data.signatures.sorted) {
               // Counting instances per version
-              var byVersion = Util.strict({});
+              var all = new Map();
               var total = 0;
               for (var hit of signature) {
                 var key = hit.product + " " + hit.version;
-                if (!(key in byVersion)) {
-                  byVersion[key] = [];
+                if (!all.has(key)) {
+                  all.set(key, []);
                 }
-                byVersion[key].push(hit);
+                all.get(key).push(hit);
                 total++;
               }
-              var sorted = [[k, byVersion[k]] for (k of Object.keys(byVersion))];
-              sorted.sort((x, y) => x[0] > y[0]);
+              var sorted = [...all].sort((x, y) => x[0] > y[0]);
 
               data.signatures.byKey.get(kind).byVersion = Util.strict({
-                all: byVersion,
+                all: all,
                 sorted: sorted,
                 total: total,
               });
