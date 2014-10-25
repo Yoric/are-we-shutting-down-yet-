@@ -120,6 +120,9 @@
 
     /**
      * Strict object.
+     *
+     * Used to catch erroneous calls to `foo.bar` more easily
+     * when `bar` doesn't have a property `foo`.
      */
     strict: function(obj = {}) {
       return new Proxy(obj, {
