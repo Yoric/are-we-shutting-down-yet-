@@ -130,7 +130,7 @@
           if (name in target) {
             return target[name];
           }
-          if (name == "then") {
+          if (name == "then" || name == "toJSON") {
             // Special case, see bug 1089128
             return undefined;
           }
@@ -688,13 +688,13 @@
   var Data = {
     normalizeSample: function(sample) {
       var hits = sample.hits.map(hit => {
-        var result = {};
+        var result = Util.strict({});
         for (var k of Object.keys(hit)) {
           result[k] = hit[k];
         }
         result.date = Date.parse(hit.date);
         try {
-          result.annotation = JSON.parse(hit.async_shutdown_timeout);
+          result.annotation = Util.strict(JSON.parse(hit.async_shutdown_timeout));
         } catch (ex if ex instanceof SyntaxError) {
           ex.json = hit.async_shutdown_timeout;
           throw ex;
@@ -819,7 +819,89 @@
 
   // Fetch data piece-wise
   (function() {
+    /**
+     * Used only for documentation purposes.
+     */
+    function ServerSample() {
+      /**
+       * @type {Array<Report>}
+       */
+      this.hits = [];
+
+      /**
+       * Total number of crashes known to the server, before
+       * capping. Always >= `this.hits.length`.
+       */
+      this.total = 0;
+      this.facets = {};
+    }
+
+    /**
+     * Used only for documentation purposes.
+     */
+    function NormalizedReport() {
+      this.date = new Date();
+
+      /**
+       * AsyncShutdown annotation, as provided as part of key
+       * async_shutdown_timeout.
+       */
+      this.annotation = {};
+
+      // More fields, provided by the server.
+    }
+
+    function SignaturesByKey() {
+      /**
+       * @type {Array<NormalizedReport>}
+       */
+      this.all = [];
+    }
+
+    /**
+     * Used only for documentation purposes.
+     */
+    function Signatures() {
+      /**
+       * @type {Array<[string, NormalizedReport]>}
+       */
+      this.sorted = [];
+
+      /**
+       * @type {ObjectMap<SignaturesByKey>}
+       */
+      this.byKey = {};
+    }
+
+    /**
+     * Used only for documentation purposes.
+     */
+    function NormalizedSample() {
+      this.total = 0;
+
+      /**
+       * @type {Array<NormalizedReport>}
+       */
+      this.normalized = [];
+
+      /**
+       * Initialized by step "Extracting all versions involved".
+       * @type {Array<{product: string, version: string}>
+       */
+      this.versions = null;
+
+      /**
+       * Initialized by step "Extracting all signatures".
+       * @type {Signatures}
+       */
+      this.signatures = null;
+    }
+
     var gDataByDay = [];
+
+    /**
+     * @type {Array<ServerSample>}
+     */
     var gSampleByDay = [];
     var gArgs = new URL(window.location).searchParams;
 
@@ -839,7 +921,12 @@
       return schedule.current = Util.schedule(v => {
         View.status(status);
         return v;
-      }, copy).then(v => Util.schedule(code, v));
+      }, copy).then(v => Util.schedule(code, v)).then(
+        result => {
+          console.log("Done", status, result);
+          return result;
+        }
+      );
     };
 
     var latestRun = 0;
@@ -863,6 +950,9 @@
             return schedule(...args);
           };
 
+          /**
+           * @return {Promise<ServerSample>}
+           */
           schedule("Getting sample for day " + age, () => {
             if (gSampleByDay[age]) {
               status("Getting sample from in-memory cache");
@@ -876,6 +966,9 @@
               return gSampleByDay[age] = sample;
             });
 
+          /**
+           * @return {Promise<ServerSample>}
+           */
           schedule("Applying filters",
             sample => {
               if (!filters) {
@@ -888,9 +981,13 @@
                 result[k] = sample[k];
               }
               result.hits = result.hits.filter(hit => filters.get(hit.product, hit.version));
+              console.log("Applying filters", result);
               return result;
           });
 
+          /**
+           * @return {Promise<NormalizedSample>}
+           */
           schedule("Normalizing sample", sample => {
             var normalized = Data.normalizeSample(sample);
             console.log("Normalized data", normalized, sample.total);
@@ -900,6 +997,9 @@
             });
           });
 
+          /**
+           * @return {Promise<NormalizedSample>} with field `versions`
+           */
           schedule("Extracting all versions involved", data => {
             var versions = Data.getAllVersionsInvolved(data.normalized);
 
@@ -912,6 +1012,10 @@
             return data;
           });
 
+          /**
+           * @return {Promise<NormalizedSample>} with fields `versions`,
+           * `signatures`.
+           */
           schedule("Extracting all signatures", data => {
             status("Getting all signatures");
             var signatures = Data.getAllSignaturesInvolved(data.normalized);
@@ -922,7 +1026,7 @@
             var byKey = {};
             for (var k of Object.keys(signatures)) {
               byKey[k] = Util.strict({
-                  all: signatures[k],
+                all: signatures[k],
               });
             }
 
