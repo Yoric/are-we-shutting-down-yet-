@@ -1069,24 +1069,40 @@
           schedule("Updating histograms", data => {
             var factor = data.total / data.normalized.length;
             for (var [kind, signature] of data.signatures.sorted) {
-              // Counting instances per version
-              var all = new Map();
-              var total = 0;
-              for (var hit of signature) {
-                var key = hit.product + " " + hit.version;
-                if (!all.has(key)) {
-                  all.set(key, []);
-                }
-                all.get(key).push(hit);
-                total++;
-              }
-              var sorted = [...all].sort((x, y) => x[0] > y[0]);
-
-              data.signatures.byKey.get(kind).byVersion = Util.strict({
-                all: all,
-                sorted: sorted,
-                total: total,
+              // Classify per build
+              var byBuild = Util.strict({
+                all: new Map(),
+                sorted: null,
               });
+
+              // Counting instances per version
+              var byVersion = Util.strict({
+                all: new Map(),
+                sorted: null,
+                total: 0,
+                byBuild: byBuild,
+              });
+
+              for (var hit of signature) {
+                // Classify by version
+                var key = hit.product + " " + hit.version;
+                if (!byVersion.all.has(key)) {
+                  byVersion.all.set(key, []);
+                }
+                byVersion.all.get(key).push(hit);
+                byVersion.total++;
+
+                // Further classify by build
+                if (!byBuild.all.has(hit.build_id)) {
+                  byBuild.all.set(hit.build_id, []);
+                }
+                byBuild.all.get(hit.build_id).push(hit);
+              }
+
+              byVersion.sorted = [...byVersion.all].sort((x, y) => x[0] > y[0]);
+              byBuild.sorted = [...byBuild.all].sort((x, y) => x[0] > y[0]);
+              data.signatures.byKey.get(kind).byVersion = byVersion;
+              console.log("Histogram by build", byBuild.sorted);
             }
             View.updateAllHistograms(gDataByDay, factor);
             return data;
