@@ -267,7 +267,7 @@
       $("status").textContent = msg;
     },
 
-    prepareHistogram: function(eStatistics, histogramRectangles, key) {
+    prepareHistogram: function(eStatistics, rectangles, key) {
       var eCanvas = document.createElement("canvas");
       eStatistics.appendChild(eCanvas);
       var context = eCanvas.getContext("2d");
@@ -278,8 +278,7 @@
       eCanvas.height = HEIGHT;
       eCanvas.style.width = WIDTH + "px";
       eCanvas.style.height = HEIGHT + "px";
-      var rectangles = [];
-      histogramRectangles.set(key, rectangles);
+      rectangles.length = 0;
 
       // Handle tooltip
       var delayedMouseMove = null;
@@ -305,11 +304,9 @@
       return context;
     },
 
-    _histogramRectanglesByBuild: new Map(),
     updateHistogramByBuild: function(context, key) {
     },
 
-    _histogramRectanglesByDay: new Map(),
     updateHistogramByDay: function(context, key, allDays, factor) {
       const WIDTH = 300;
       const HEIGHT = 300;
@@ -317,7 +314,7 @@
       context.fillStyle = "white";
       context.fillRect(0, 0, WIDTH, HEIGHT);
 
-      var rectangles = this._histogramRectanglesByDay.get(key);
+      var rectangles = this._elements.get(key).histogramsByDay;
       rectangles.length = 0;
 
       // Determine max
@@ -666,13 +663,22 @@
       });
       eRefineExclude.href = urlExclude;
 */
-      // Show histogram
+      // Show histograms
       var eStatisticsByDay = document.createElement("div");
       eStatisticsByDay.classList.add("statistics");
+      elements.histogramsByDay = [];
       elements.contextByDay = View.prepareHistogram(eStatisticsByDay,
-        this._histogramRectanglesByDay, key);
+        elements.histogramsByDay, key);
       eCrash.appendChild(eStatisticsByDay);
       elements.eStatisticsByDay = eStatisticsByDay;
+
+      var eStatisticsByBuild = document.createElement("div");
+      eStatisticsByBuild.classList.add("statistics");
+      elements.histogramsByBuild = [];
+      elements.contextByBuild = View.prepareHistogram(eStatisticsByBuild,
+        elements.histogramsByBuild, key);
+      eCrash.appendChild(eStatisticsByBuild);
+      elements.eStatisticsByBuild = eStatisticsByBuild;
   
       // Show links
       var eLinks = document.createElement("ul");
