@@ -267,7 +267,7 @@
       $("status").textContent = msg;
     },
 
-    prepareHistogram: function(eStatistics, key) {
+    prepareHistogram: function(eStatistics, histogramRectangles, key) {
       var eCanvas = document.createElement("canvas");
       eStatistics.appendChild(eCanvas);
       var context = eCanvas.getContext("2d");
@@ -279,7 +279,7 @@
       eCanvas.style.width = WIDTH + "px";
       eCanvas.style.height = HEIGHT + "px";
       var rectangles = [];
-      this._histogramRectangles.set(key, rectangles);
+      histogramRectangles.set(key, rectangles);
 
       // Handle tooltip
       var delayedMouseMove = null;
@@ -305,15 +305,19 @@
       return context;
     },
 
-    _histogramRectangles: new Map(),
-    updateHistogram: function(context, key, allDays, factor) {
+    _histogramRectanglesByBuild: new Map(),
+    updateHistogramByBuild: function(context, key) {
+    },
+
+    _histogramRectanglesByDay: new Map(),
+    updateHistogramByDay: function(context, key, allDays, factor) {
       const WIDTH = 300;
       const HEIGHT = 300;
       const DAYS_BACK = allDays.length;
       context.fillStyle = "white";
       context.fillRect(0, 0, WIDTH, HEIGHT);
 
-      var rectangles = this._histogramRectangles.get(key);
+      var rectangles = this._histogramRectanglesByDay.get(key);
       rectangles.length = 0;
 
       // Determine max
@@ -403,7 +407,8 @@
     },
     updateAllHistograms: function(allData, factor) {
       for (var [k, v] of this._elements) {
-        this.updateHistogram(v.context, k, allData, factor);
+        this.updateHistogramByDay(v.contextByDay, k, allData, factor);
+        this.updateHistogramByBuild(v.contextByBuild, k, allData, factor);
       }
     },
 
@@ -662,11 +667,12 @@
       eRefineExclude.href = urlExclude;
 */
       // Show histogram
-      var eStatistics = document.createElement("div");
-      eStatistics.classList.add("statistics");
-      elements.context = View.prepareHistogram(eStatistics, key);
-      eCrash.appendChild(eStatistics);
-      elements.eStatistics = eStatistics;
+      var eStatisticsByDay = document.createElement("div");
+      eStatisticsByDay.classList.add("statistics");
+      elements.contextByDay = View.prepareHistogram(eStatisticsByDay,
+        this._histogramRectanglesByDay, key);
+      eCrash.appendChild(eStatisticsByDay);
+      elements.eStatisticsByDay = eStatisticsByDay;
   
       // Show links
       var eLinks = document.createElement("ul");
