@@ -139,7 +139,20 @@
           throw error;
         },
       });
-    }
+    },
+
+    buildToDate: function(build_id) {
+      var [,yy,MM,dd,hh,mm,ss] = /(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/.exec(build_id);
+      var date = new Date();
+      date.setUTCFullYear(yy);
+      date.setUTCMonth(MM - 1);
+      date.setUTCDate(dd);
+      date.setUTCHours(hh);
+      date.setUTCMinutes(mm);
+      date.setUTCSeconds(ss);
+      console.log("buildToDate", build_id, date);
+      return date;
+    },
 
   };
   Util.Filter.prototype = {
@@ -304,9 +317,6 @@
       return context;
     },
 
-    updateHistogramByBuild: function(context, key) {
-    },
-
     updateHistogramByDay: function(context, key, allDays, factor) {
       const WIDTH = 300;
       const HEIGHT = 300;
@@ -336,6 +346,7 @@
       }
 
       // Display rectangles
+      // FIXME: Add build information
       const H = HEIGHT/max;
       const W = WIDTH/DAYS_BACK;
       allDays.forEach((byDay, age) => {
@@ -405,7 +416,66 @@
     updateAllHistograms: function(allData, factor) {
       for (var [k, v] of this._elements) {
         this.updateHistogramByDay(v.contextByDay, k, allData, factor);
-        this.updateHistogramByBuild(v.contextByBuild, k, allData, factor);
+      }
+    },
+
+    updateBuildInformation: function(eBuilds, key, allDays) {
+      var versions = new Map();
+      // Fold build information from all days
+      allDays.forEach((byDay, age) => {
+        var byKey = byDay.signatures.byKey;
+        if (!byKey.has(key)) {
+          // No such crash on that day
+          return;
+        }
+        var byVersion = byKey.get(key).byVersion;
+        [...byVersion.builds].forEach(v => {
+          var [version, builds] = v;
+          var thisVersion = versions.get(version);
+          if (!thisVersion) {
+            thisVersion = Util.strict({
+              minBuild: null,
+              maxBuild: null,
+            });
+            versions.set(version, thisVersion);
+          }
+          if (thisVersion.minBuild == null || thisVersion.minBuild > builds.minBuild) {
+            thisVersion.minBuild = builds.minBuild;
+          }
+          if (thisVersion.maxBuild == null || thisVersion.maxBuild < builds.maxBuild) {
+            thisVersion.maxBuild = builds.maxBuild;
+          }
+        });
+      });
+      // Now display stuff
+      eBuilds.innerHTML = "";
+      var builds = [...versions].sort((x, y) => x[0] < y[0]);
+      builds.forEach(v => {
+        var [version, {minBuild, maxBuild}] = v;
+        var minDate = Util.buildToDate(minBuild).toDateString();
+        var maxDate = Util.buildToDate(maxBuild).toDateString();
+        var li = document.createElement("li");
+
+        var eVersion = document.createElement("span");
+        eVersion.textContent = version + " ";
+        eVersion.style.color = View._colors.get(version);
+        li.appendChild(eVersion);
+
+        var eDates = document.createElement("span");
+        if (minDate == maxDate) {
+          eDates.textContent = minDate;
+        } else {
+          eDates.textContent = minDate + " to " + maxDate;
+        }
+        li.appendChild(eDates);
+
+        eBuilds.appendChild(li);
+      });
+    },
+
+    updateAllBuildInformation: function(allData) {
+      for (var [k, v] of this._elements) {
+        this.updateBuildInformation(v.eBuilds, k, allData);
       }
     },
 
@@ -672,6 +742,7 @@
       eCrash.appendChild(eStatisticsByDay);
       elements.eStatisticsByDay = eStatisticsByDay;
 
+/*
       var eStatisticsByBuild = document.createElement("div");
       eStatisticsByBuild.classList.add("statistics");
       elements.histogramsByBuild = [];
@@ -679,7 +750,7 @@
         elements.histogramsByBuild, key);
       eCrash.appendChild(eStatisticsByBuild);
       elements.eStatisticsByBuild = eStatisticsByBuild;
-  
+  */
       // Show links
       var eLinks = document.createElement("ul");
       eLinks.classList.add("links");
@@ -691,6 +762,20 @@
       eStacks.classList.add("stacks");
       eCrash.appendChild(eStacks);
       elements.eStacks = eStacks;
+
+      // Show per build information
+      var eBuildsParent = document.createElement("div");
+      eCrash.appendChild(eBuildsParent);
+
+      var eBuildsTitle = document.createElement("span");
+      eBuildsTitle.textContent = "Spotted in builds";
+      eBuildsTitle.classList.add("spotted_in_builds");
+      eBuildsParent.appendChild(eBuildsTitle);
+
+      var eBuilds = document.createElement("ul");
+      eBuilds.classList.add("builds");
+      eBuildsParent.appendChild(eBuilds);
+      elements.eBuilds = eBuilds;
 
       this._elements.set(key, elements);
       return elements;
@@ -1081,18 +1166,19 @@
           schedule("Updating histograms", data => {
             var factor = data.total / data.normalized.length;
             for (var [kind, signature] of data.signatures.sorted) {
+/*
               // Classify per build
               var byBuild = Util.strict({
                 all: new Map(),
                 sorted: null,
               });
-
+*/
               // Counting instances per version
               var byVersion = Util.strict({
-                all: new Map(),
+                all: new Map(), // key => Array<hit>
+                builds: new Map(), // key => {minBuild, maxBuild}
                 sorted: null,
                 total: 0,
-                byBuild: byBuild,
               });
 
               for (var hit of signature) {
@@ -1100,23 +1186,41 @@
                 var key = hit.product + " " + hit.version;
                 if (!byVersion.all.has(key)) {
                   byVersion.all.set(key, []);
+                  byVersion.builds.set(key, {minBuild: null, maxBuild:null});
                 }
                 byVersion.all.get(key).push(hit);
                 byVersion.total++;
 
-                // Further classify by build
-                if (!byBuild.all.has(hit.build_id)) {
-                  byBuild.all.set(hit.build_id, []);
+                var build = hit.build_id;
+/*
+                // Classify by build
+                if (!byBuild.all.has(build)) {
+                  byBuild.all.set(build, Util.strict({
+                    byVersion: Util.strict({
+                      all: new Map(),
+                      sorted: null,
+                      total: 0,
+                    })
+                  }));
                 }
-                byBuild.all.get(hit.build_id).push(hit);
+*/
+                var builds = byVersion.builds.get(key);
+                if (builds.minBuild == null || builds.minBuild > build) {
+                  builds.minBuild = build;
+                }
+                if (builds.maxBuild == null || builds.maxBuild < build) {
+                  builds.maxBuild = build;
+                }
               }
 
               byVersion.sorted = [...byVersion.all].sort((x, y) => x[0] > y[0]);
-              byBuild.sorted = [...byBuild.all].sort((x, y) => x[0] > y[0]);
+//              byBuild.sorted = [...byBuild.all].sort((x, y) => x[0] > y[0]);
               data.signatures.byKey.get(kind).byVersion = byVersion;
-              console.log("Histogram by build", byBuild.sorted);
+//              data.signatures.byKey.get(kind).byBuild = byBuild;
+//              console.log("Histogram by build", byBuild.sorted);
             }
             View.updateAllHistograms(gDataByDay, factor);
+            View.updateAllBuildInformation(gDataByDay);
             return data;
           });
 
