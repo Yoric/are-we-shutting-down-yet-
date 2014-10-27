@@ -150,7 +150,6 @@
       date.setUTCHours(hh);
       date.setUTCMinutes(mm);
       date.setUTCSeconds(ss);
-      console.log("buildToDate", build_id, date);
       return date;
     },
 
@@ -288,33 +287,35 @@
         options.push({async_shutdown_timeout: operator + content});
       });
 
+      // Fetch data from the cache
+
       var key = JSON.stringify(options);
-      var promise = this.promiseDB;
-      promise = promise.then(db => {
-        console.log("Opening db");
-        var store = db.transaction("serverData", "readonly").objectStore("serverData");
-        console.log("Store", store);
-        return new Promise((resolve, reject) => {
-          var req = store.get(key);
-          req.onsuccess = () => resolve(req.result);
-          req.onerror = reject;
-        });
-      });
+      var promise = this._fetchFromCache(key);
       promise = promise.then(entry => {
-        console.log("Finished reading from db", entry);
         if (entry) {
-          status("Data was present in the cache");
-          entry.latestUse = Date.now();
-          this._updateCache(key, entry);
-          return entry.data;
+          entry.isStable = entry.isStable || false;
+          entry.fetched = entry.fetched || 0;
+          console.log("Data was in the cache", entry);
+          if (entry.isStable || (Date.now() - entry.fetched < 3600 * 1000)) {
+            // We can use this data
+            entry.latestUse = Date.now();
+            this._updateCache(key, entry);
+            return entry.data;
+          }
+          // Otherwise, this data was fetched for a given day before that day was over,
+          // so we need to refetch.
+          console.log("Data was in the cache, but is too old and not stable");
+        } else {
+          console.log("Data was not in the cache");
         }
-        status("Data needs to be fetched from the server");
         return Util.fetch(Server.BASE_URI, options, "", 1000, 5).then(data => {
           status("Putting data in the cache");
           var entry = {
             key: key,
+            fetched: Date.now(),
             latestUse: Date.now(),
             data: data,
+            isStable: daysAgo != 0,
           };
           this._updateCache(key, entry);
           return data;
@@ -328,6 +329,18 @@
       return promise;
     },
 
+    _fetchFromCache: function(key) {
+      var promise = this.promiseDB;
+      promise = promise.then(db => {
+        var store = db.transaction("serverData", "readonly").objectStore("serverData");
+        return new Promise((resolve, reject) => {
+          var req = store.get(key);
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = reject;
+        });
+      });
+      return promise;
+    },
     _updateCache: function(key, entry) {
       var promise = this.promiseDB;
       promise = promise.then(db => {
@@ -343,7 +356,25 @@
         return error;
       });
     },
-
+    cleanupCache: function(after) {
+      var promise = this.promiseDB;
+      promise = promise.then(db => {
+        var store = db.transaction("serverData", "readwrite").objectStore("serverData");
+        var req = store.openCursor();
+        req.onsuccess = function(event) {
+          var cursor = req.result;
+          if (!cursor) {
+            return;
+          }
+          if (Date.now() - cursor.value.latestUse > after) {
+            console.log("Cleaning up entry from", new Date(cursor.value.latestUse));
+            cursor.delete();
+          }
+          cursor.continue();
+        };
+      });
+      return promise;
+    },
     BASE_URI: "https://crash-stats.allizom.org/api/SuperSearch/",
 
   };
@@ -447,7 +478,6 @@
         var nightlies = 0;
         var thatDay = new Date();
         thatDay.setDate(thatDay.getDate() - age);
-        console.log("Extracting nightlies for", thatDay);
         hits.forEach(v => {
           if (v.release_channel != "nightly") {
             return;
@@ -460,21 +490,16 @@
           date.setYear = year;
           date.setMonth = month - 1;
           date.setDate = day;
-          console.log("Nightly build", date, "we'd like", thatDay);
           if (thatDay.getDate() != day) {
-            console.log("Wrong day", thatDay.getDate(), day);
             return;
           }
           if (thatDay.getMonth() != month) {
-            console.log("Wrong month", thatDay.getMonth(), month);
             return;
           }
           if (thatDay.getYear() != year) {
-            console.log("Wrong year", thatDay.getYear(), year);
             return;
           }
           nightlies++;
-          console.log("Nightly", nightlies);
         });
       });
 
@@ -568,7 +593,6 @@
           var eSingleDay;
           eSingleDay = children.find(x => x.getAttribute("_dashboard_ago") == "" + age);
           if (signature.length > 0) {
-            console.log("We have links for", kind, age, signature);
             if (eSingleDay) {
               eSingleDay.innerHTML = "";
             } else {
@@ -576,7 +600,6 @@
               eSingleDay.setAttribute("_dashboard_ago", age);
             }
           } else {
-            console.log("NO links for", kind, age, signature);
             if (eSingleDay) {
               eLinks.removeChild(eSingleDay);
             }
@@ -636,7 +659,6 @@
         if (condition && !("stack" in condition)) {
           continue;
         }
-        console.log("Found a stack");
         eStacks.textContent = "";
 
         for (condition of sample.conditions) {
@@ -681,7 +703,6 @@
       var boxToVersion = new Map();
 
       var filterArgs = new URL(window.location).searchParams.getAll("version");
-      console.log("setupColors", "filterArgs", filterArgs);
       versions.forEach((v, i) => {
         var {product, version} = v;
         var description = product + " " + version;
@@ -699,7 +720,6 @@
         boxToVersion.set(eCheckBox, v);
 
         if (filterArgs.length == 0 || filterArgs.some(x => {
-            console.log("setupColors", "comparing", x, description);
             return x == description;
         })) {
           eCheckBox.checked = "checked";
@@ -713,7 +733,6 @@
           }
           updateDisplayTimeout = window.setTimeout(function() {
             Util.schedule(() => {
-              console.log("setupColors", "User requested a display update");
               updateDisplayTimeout = null;
               var filter = new Util.Filter();
               var newURL = new URL(window.location);
@@ -721,7 +740,6 @@
               newArgs.delete("version");
 
               for (var [box, {product, version}] of boxToVersion) {
-                console.log("setupColors", "adding to filter", product, version, box.checked);
                 filter.set(product, version, box.checked);
                 if (box.checked) {
                   newArgs.append("version", product + " " + version);
@@ -902,7 +920,6 @@
           list.push({product: product, version: version});
         }
       }
-      console.log("All versions involved", list);
       return list;
     },
 
@@ -969,7 +986,6 @@
         thatVersion.push(annotation);
       }
 
-      console.log([...map]);
       return {
         /**
          * All the hits.
@@ -1147,13 +1163,11 @@
                 status("No filters");
                 return sample;
               }
-              console.log("We need to filter out some stuff");
               var result = Util.strict({});
               for (var k of Object.keys(sample)) {
                 result[k] = sample[k];
               }
               result.hits = result.hits.filter(hit => filters.get(hit.product, hit.version));
-              console.log("Applying filters", result);
               return result;
           });
 
@@ -1162,7 +1176,6 @@
            */
           schedule("Normalizing sample", sample => {
             var normalized = Data.normalizeSample(sample);
-            console.log("Normalized data", normalized, sample.total);
             return gDataByDay[age] = Util.strict({
               total: sample.total,
               normalized: normalized,
@@ -1227,7 +1240,6 @@
               totalHits += oneDay.total;
             });
 
-            console.log("Total sample size", sampleSize);
             for (var [kind, signature] of data.signatures.sorted) {
               var display = View.prepareSignatureForDisplay(kind, DAYS_BACK);
               display.eHits.textContent = "Crashes: " + 
@@ -1240,13 +1252,6 @@
           schedule("Updating histograms", data => {
             var factor = data.total / data.normalized.length;
             for (var [kind, signature] of data.signatures.sorted) {
-/*
-              // Classify per build
-              var byBuild = Util.strict({
-                all: new Map(),
-                sorted: null,
-              });
-*/
               // Counting instances per version
               var byVersion = Util.strict({
                 all: new Map(), // key => Array<hit>
@@ -1266,18 +1271,6 @@
                 byVersion.total++;
 
                 var build = hit.build_id;
-/*
-                // Classify by build
-                if (!byBuild.all.has(build)) {
-                  byBuild.all.set(build, Util.strict({
-                    byVersion: Util.strict({
-                      all: new Map(),
-                      sorted: null,
-                      total: 0,
-                    })
-                  }));
-                }
-*/
                 var builds = byVersion.builds.get(key);
                 if (builds.minBuild == null || builds.minBuild > build) {
                   builds.minBuild = build;
@@ -1288,10 +1281,7 @@
               }
 
               byVersion.sorted = [...byVersion.all].sort((x, y) => x[0] > y[0]);
-//              byBuild.sorted = [...byBuild.all].sort((x, y) => x[0] > y[0]);
               data.signatures.byKey.get(kind).byVersion = byVersion;
-//              data.signatures.byKey.get(kind).byBuild = byBuild;
-//              console.log("Histogram by build", byBuild.sorted);
             }
             View.updateAllHistograms(gDataByDay, factor);
             View.updateAllBuildInformation(gDataByDay);
@@ -1310,6 +1300,7 @@
           });
 
         }).then(() => {
+          Server.cleanupCache(30 * 24 * 3600 * 1000); // Cleanup entries that are at least 1 month old.
           status("Done");
         });
     };
