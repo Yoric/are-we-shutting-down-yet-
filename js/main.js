@@ -204,6 +204,27 @@
   };
 
   var Server = {
+    _cacheDB: null,
+    get promiseDB() {
+      if (this._cacheDB) {
+        return this._cacheDB;
+      }
+      return this._cacheDB = new Promise((resolve, reject) => {
+        var reqDB = window.indexedDB.open("Are We Shutting Down Yet?", 1);
+        reqDB.onupgradeneeded = function(event) {
+          var db = event.target.result;
+          console.log("Upgrade needed", db);
+          db.createObjectStore("serverData", { keyPath: "key" });
+        };
+        reqDB.onsuccess = function(event) {
+          var db = event.target.result;
+          console.log("Database opened", db);
+          resolve(db);
+        };
+        reqDB.onerror = reject;
+      });
+    },
+
     getCount: function() {
       status("Fetching size of sample");
       var promise = Util.fetch(Server.BASE_URI, {
@@ -267,7 +288,60 @@
         options.push({async_shutdown_timeout: operator + content});
       });
 
-      return Util.fetch(Server.BASE_URI, options, "", 1000, 5);
+      var key = JSON.stringify(options);
+      var promise = this.promiseDB;
+      promise = promise.then(db => {
+        console.log("Opening db");
+        var store = db.transaction("serverData", "readonly").objectStore("serverData");
+        console.log("Store", store);
+        return new Promise((resolve, reject) => {
+          var req = store.get(key);
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = reject;
+        });
+      });
+      promise = promise.then(entry => {
+        console.log("Finished reading from db", entry);
+        if (entry) {
+          status("Data was present in the cache");
+          entry.latestUse = Date.now();
+          this._updateCache(key, entry);
+          return entry.data;
+        }
+        status("Data needs to be fetched from the server");
+        return Util.fetch(Server.BASE_URI, options, "", 1000, 5).then(data => {
+          status("Putting data in the cache");
+          var entry = {
+            key: key,
+            latestUse: Date.now(),
+            data: data,
+          };
+          this._updateCache(key, entry);
+          return data;
+        });
+      });
+      promise = promise.then(null, error => {
+        console.error(error);
+        return error;
+      });
+
+      return promise;
+    },
+
+    _updateCache: function(key, entry) {
+      var promise = this.promiseDB;
+      promise = promise.then(db => {
+        var store = db.transaction("serverData", "readwrite").objectStore("serverData");
+        var req = store.put(entry);
+        return new Promise((resolve, reject) => {
+          req.onsuccess = resolve;
+          req.onerror = reject;
+        });
+      });
+      promise = promise.then(null, error => {
+        console.error(error);
+        return error;
+      });
     },
 
     BASE_URI: "https://crash-stats.allizom.org/api/SuperSearch/",
@@ -1233,11 +1307,6 @@
           return schedule("Done for the day", () => {
             window.location.hash = window.location.hash;
             $("Results").classList.remove("loading");
-            if (!filters) {
-              return new Promise(resolve => window.setTimeout(resolve, 1000));
-            } else {
-              return undefined;
-            }
           });
 
         }).then(() => {
