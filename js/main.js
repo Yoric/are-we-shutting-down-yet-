@@ -77,7 +77,7 @@
             reject(response);
           }
         }));
-  
+
       xhr.open("GET", uri, true);
       xhr.send();
       return result;
@@ -209,7 +209,7 @@
         return this._cacheDB;
       }
       return this._cacheDB = new Promise((resolve, reject) => {
-        var reqDB = window.indexedDB.open("Are We Shutting Down Yet?", 1);
+        var reqDB = window.indexedDB.open("AreWeShuttingDownYet", 2);
         reqDB.onupgradeneeded = function(event) {
           var db = event.target.result;
           console.log("Upgrade needed", db);
@@ -220,7 +220,9 @@
           console.log("Database opened", db);
           resolve(db);
         };
-        reqDB.onerror = reject;
+        reqDB.onerror = function(event) {
+          reject(event);
+        };
       });
     },
 
@@ -247,7 +249,7 @@
       date.setDate(date.getDate() - daysAgo);
       var isoDay = date.toISOString().substring(0, 10);
       status("Fetching data for " + isoDay);
-      date.setDate(date.getDate() + 1);      
+      date.setDate(date.getDate() + 1);
       var isoNextDay = date.toISOString().substring(0, 10);
 
       var options = [
@@ -262,7 +264,6 @@
           date: "<" + isoNextDay
         }
       ];
-
 
       restrict.versions.forEach(v => {
         var [product, version] = v.split(" ");
@@ -330,8 +331,10 @@
     },
 
     _fetchFromCache: function(key) {
+      status("Attempting to fetch from cache");
       var promise = this.promiseDB;
       promise = promise.then(db => {
+        status("Starting transaction");
         var store = db.transaction("serverData", "readonly").objectStore("serverData");
         return new Promise((resolve, reject) => {
           var req = store.get(key);
@@ -504,7 +507,7 @@
       });
 
       // Display Nightly values
-      
+
 
       // Display time graduations
       context.fillStyle = "black";
@@ -647,7 +650,7 @@
     showStacks: function(crash, eStacks) {
       status("Preparing stacks");
       eStacks.textContent = "No report contained a valid stack";
-      
+
       // Search a sample with a stack
       var found = false;
       for (var sample of crash.data.all) {
@@ -886,7 +889,8 @@
           result.annotation = Util.strict(JSON.parse(hit.async_shutdown_timeout));
         } catch (ex if ex instanceof SyntaxError) {
           ex.json = hit.async_shutdown_timeout;
-          throw ex;
+          console.error("Parse error", ex);
+          return null;
         }
         result.annotation.conditions.forEach((condition, i) => {
           if (typeof condition == "string") {
@@ -898,6 +902,7 @@
         delete result.async_shutdown_timeout;
         return result;
       });
+      hits = hits.filter(x => x != null);
       return hits.sort((h1, h2) => {
         if (h1.version == h2.version) {
           return h1.date >= h2.date;
@@ -946,7 +951,7 @@
 
       // Group hits by signature/day/version
       for (var hit of hits) {
-      
+
         // Determine signature
         var annotation = hit.annotation;
         var names = [condition.name for (condition of
@@ -1242,7 +1247,7 @@
 
             for (var [kind, signature] of data.signatures.sorted) {
               var display = View.prepareSignatureForDisplay(kind, DAYS_BACK);
-              display.eHits.textContent = "Crashes: " + 
+              display.eHits.textContent = "Crashes: " +
                 Math.ceil((estimates[kind] * 100) / sampleSize) +
                 "% of " + sampleSize + " samples (~" + Math.ceil(estimates[kind] * factor) + " total crashes over " + gDataByDay.length + " days)";
             };
