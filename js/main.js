@@ -387,7 +387,7 @@
       });
       return promise;
     },
-    BASE_URI: "https://crash-stats.allizom.org/api/SuperSearch/",
+    BASE_URI: "https://crash-stats.mozilla.com/api/SuperSearch/",
 
   };
 
