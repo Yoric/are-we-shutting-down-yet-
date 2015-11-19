@@ -262,7 +262,16 @@
         },
         {
           date: "<" + isoNextDay
-        }
+        },
+        {_columns: "date"},
+        {_columns: "product"},
+        {_columns: "version"},
+        {_columns: "build_id"},
+        {_columns: "platform"},
+        {_columns: "async_shutdown_timeout"},
+        {_columns: "release_channel"},
+        {_columns: "process_type"},
+        {_columns: "uuid"},
       ];
 
       restrict.versions.forEach(v => {
@@ -879,6 +888,7 @@
 
   var Data = {
     normalizeSample: function(sample) {
+      console.log("Hits", sample);
       var hits = sample.hits.map(hit => {
         var result = Util.strict({});
         for (var k of Object.keys(hit)) {
@@ -889,7 +899,7 @@
           result.annotation = Util.strict(JSON.parse(hit.async_shutdown_timeout));
         } catch (ex if ex instanceof SyntaxError) {
           ex.json = hit.async_shutdown_timeout;
-          console.error("Parse error", ex);
+          console.error("Parse error", ex, hit);
           return null;
         }
         result.annotation.conditions.forEach((condition, i) => {
