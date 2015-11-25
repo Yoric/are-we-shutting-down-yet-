@@ -298,6 +298,13 @@
         options.push({async_shutdown_timeout: operator + content});
       });
 
+      if ("e10s" in restrict) {
+        if (restrict.e10s) {
+          options.push({dom_ipc_enabled: "!__null__"});
+        } else {
+          options.push({dom_ipc_enabled: "_null__"});
+        }
+      }
       // Fetch data from the cache
 
       var key = JSON.stringify(options);
@@ -1123,6 +1130,10 @@
       versions: gArgs.getAll("version"),
       signatures: gArgs.getAll("signature"),
     };
+
+    if (gArgs.has("e10s")) {
+      gRestrict.e10s = gArgs.get("e10s");
+    }
 
     var schedule = function(status, code) {
       if (schedule.current == null) {
