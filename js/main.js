@@ -272,6 +272,7 @@
         {_columns: "release_channel"},
         {_columns: "process_type"},
         {_columns: "uuid"},
+        {_columns: "dom_ipc_enabled"}
       ];
 
       restrict.versions.forEach(v => {
@@ -562,25 +563,29 @@
       eBuilds.innerHTML = "";
       var builds = [...versions].sort((x, y) => x[0] < y[0]);
       builds.forEach(v => {
-        var [version, {minBuild, maxBuild}] = v;
-        var minDate = Util.buildToDate(minBuild).toDateString();
-        var maxDate = Util.buildToDate(maxBuild).toDateString();
-        var li = document.createElement("li");
+        try {
+          var [version, {minBuild, maxBuild}] = v;
+          var minDate = Util.buildToDate(minBuild).toDateString();
+          var maxDate = Util.buildToDate(maxBuild).toDateString();
+          var li = document.createElement("li");
 
-        var eVersion = document.createElement("span");
-        eVersion.textContent = version + " ";
-        eVersion.style.color = View._colors.get(version);
-        li.appendChild(eVersion);
+          var eVersion = document.createElement("span");
+          eVersion.textContent = version + " ";
+          eVersion.style.color = View._colors.get(version);
+          li.appendChild(eVersion);
 
-        var eDates = document.createElement("span");
-        if (minDate == maxDate) {
-          eDates.textContent = minDate;
-        } else {
-          eDates.textContent = minDate + " to " + maxDate;
+          var eDates = document.createElement("span");
+          if (minDate == maxDate) {
+            eDates.textContent = minDate;
+          } else {
+            eDates.textContent = minDate + " to " + maxDate;
+          }
+          li.appendChild(eDates);
+
+          eBuilds.appendChild(li);
+        } catch (ex) {
+          console.error(ex, "ignoring");
         }
-        li.appendChild(eDates);
-
-        eBuilds.appendChild(li);
       });
     },
 
@@ -643,6 +648,9 @@
               var version = hit.product + " " + hit.version;
               if (hit.release_channel == "nightly") {
                 version += " " + hit.build_id;
+              }
+              if ("dom_ipc_enabled" in hit) {
+                version += " (e10s)";
               }
               eLink.textContent = hit.uuid + " (" +  version + ")";
 
@@ -1278,6 +1286,9 @@
               for (var hit of signature) {
                 // Classify by version
                 var key = hit.product + " " + hit.version;
+                if ("dom_ipc_enabled" in hit) {
+                  key += " (e10s)";
+                }
                 if (!byVersion.all.has(key)) {
                   byVersion.all.set(key, []);
                   byVersion.builds.set(key, {minBuild: null, maxBuild:null});
