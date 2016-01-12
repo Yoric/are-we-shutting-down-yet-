@@ -956,8 +956,7 @@
     getAllSignaturesInvolved: function(normalized) {
       var signatures = {};
       for (var hit of normalized) {
-        var names = [condition.name for (condition of
-          hit.annotation.conditions)].sort();
+        var names = hit.annotation.conditions.map(condition => condition.name).sort();
         var key = names.join(" | ");
         if (!(key in signatures)) {
           signatures[key] = [];
@@ -979,8 +978,7 @@
 
         // Determine signature
         var annotation = hit.annotation;
-        var names = [condition.name for (condition of
-                                       annotation.conditions)].sort();
+        var names = annotation.conditions.map(condition => condition.name).sort();
         var key = names.join(" | ");
         if (names == "" || names == " | ") {
           console.log("Weird names", hit);
@@ -1239,7 +1237,7 @@
             status("Getting all signatures");
             var signatures = Data.getAllSignaturesInvolved(data.normalized);
 
-            var list = [[k, signatures[k]] for (k of Object.keys(signatures))];
+            var list = Object.keys(signatures).map(k => [k, signatures[k]]);
             list.sort((x, y) => x[1].length <= y[1].length);
 
             var byKey = new Map();
